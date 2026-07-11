@@ -39,10 +39,14 @@ sincrona actual.
 `round_win_dataset.py` construye un dataset aislado con acciones/loadouts
 historicos como tratamiento y labels `round_won`. `train_round_win_model.py`
 aplica validacion anti-leakage, split temporal, preprocesado numerico/categorico
-y regresion logistica balanceada. Publica opcionalmente
+y regresion logistica sin balanceo artificial de probabilidades. Separa por
+partidas completas y orden temporal en train, calibracion y test; compara la
+probabilidad sin calibrar con calibracion sigmoide y excluye columnas
+constantes o dominadas por defaults. Publica opcionalmente
 `artifacts/round_win_loadout.joblib` con `feature_version`, features y metricas.
-La version `round-win-loadout-v2` incorpora proyecciones pre-ronda enemigas;
-los snapshots v1 se rechazan para evitar tratarlos falsamente como enemy-aware.
+La version `round-win-loadout-v3` separa valor de arma, armadura y utilidad,
+incorpora proyecciones pre-ronda enemigas e informa calidad por feature;
+los snapshots v1/v2 se rechazan como incompatibles.
 El script `scripts/entrenamiento_economia.py` ejecuta este entrenamiento despues
 del pipeline principal; si faltan muestras o clases informa `available=false`
 sin borrar ni bloquear el motor de reglas.
@@ -141,6 +145,25 @@ Cada fila separa tres conceptos:
 - Accion: categoria de compra y perfil postcompra observado o simulado.
 - Labels: resultado de ronda, partida y economia futura.
 
+El contrato executable vive en `schemas.py`: `STATE_FEATURES` contiene solo
+estado precompra, `ACTION_FEATURES` se recalcula para la compra observada o
+cada candidato, `LABEL_COLUMNS` nunca entra al modelo y
+`PROPENSITY_FEATURES` es estrictamente un subconjunto del estado. En
+particular `macro_buy_case` y `economy_intent` son atributos de la accion, no
+del estado, y se vuelven a clasificar al simular cada alternativa.
+
+El propensity model usa regresion logistica sin `class_weight=balanced` y
+probabilidades out-of-fold con ventanas temporales expansivas agrupadas por
+`match_id`. Los pesos son stabilized IPW con clipping y reporte de soporte,
+overlap, percentiles, tasa de clipping y effective sample size. Es una
+correccion observacional; no se implementa ni se declara AIPW.
+
+Para cada label se comparan regresion logistica e HistGradientBoosting y las
+opciones de calibracion en el conjunto de calibracion. El criterio es log loss,
+Brier, ECE y despues ROC-AUC. El test queda reservado para la evaluacion final.
+Los modelos por rango se consideran por calidad y no solo por especificidad;
+un artefacto con test manifiestamente insuficiente se omite.
+
 No se usan como features pre-round kills, damage, resultado de la ronda actual,
 plant/defuse actual, score post-round ni loadout enemigo post-buy.
 
@@ -223,6 +246,17 @@ Reentrenamiento local:
 venv\Scripts\python.exe scripts\entrenamiento_economia.py
 ```
 
+Antes de publicar un schema nuevo, validar y regenerar el parquet desde MongoDB:
+
+```powershell
+venv\Scripts\python.exe scripts\entrenamiento_economia.py --validate-only
+venv\Scripts\python.exe scripts\entrenamiento_economia.py
+```
+
+`--validate-only` reconstruye el dataset en memoria y comprueba el contrato sin
+guardar ni entrenar. No use `--allow-invalid` para publicar: existe solo para
+diagnostico. Tras entrenar, reinicie el backend para cargar los artefactos.
+
 Ese comando entrena tanto los modelos historicos principales como el modelo
 opcional round-win. Para entrenar solo este ultimo sobre un parquet existente:
 
@@ -250,6 +284,7 @@ Comprobar status del modelo:
 $env:PYTHONPATH='backend'; venv\Scripts\python.exe -c "from modules.economy_ml.model_registry import status; print(status())"
 ```
 
-Los artefactos incluyen `schema_version`. Con `SCHEMA_VERSION = 10`, artefactos
-v9 o anteriores se rechazan hasta reentrenar porque se eliminaron features con
-leakage derivadas del post-buy observado.
+Los artefactos incluyen `schema_version`, `feature_version`, grupos de estado,
+accion y labels, numero de partidas, modelo seleccionado, calibracion y
+metricas. Con `SCHEMA_VERSION = 11`, artefactos v10 o anteriores se rechazan
+hasta reentrenar porque cambio la semantica de las features de accion.
