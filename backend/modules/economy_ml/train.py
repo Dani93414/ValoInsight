@@ -12,6 +12,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.isotonic import IsotonicRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -22,7 +23,7 @@ from .schemas import (
     CATEGORICAL_FEATURES, FORBIDDEN_FEATURES, MODEL_FEATURES, NUMERIC_FEATURES,
     AGENT_UTILITY_NUMERIC_FEATURES,
     PREBUY_CATEGORICAL_FEATURES, PREBUY_NUMERIC_FEATURES, PROPENSITY_FEATURES,
-    SCHEMA_VERSION, validate_no_feature_leakage,
+    ACTION_FEATURES, LABEL_COLUMNS, SCHEMA_VERSION, STATE_FEATURES, validate_no_feature_leakage,
 )
 from .ability_catalog import ability_costs_available
 from .config import PLAN_VALUE_WEIGHTS
@@ -33,6 +34,8 @@ MIN_SAMPLES_RANK_GROUP = 700
 MIN_SAMPLES_RANK_NAME = 500
 MIN_ACTION_SUPPORT = 25
 MAX_IPW_WEIGHT = 10.0
+MIN_PROPENSITY = 0.02
+MIN_ISOTONIC_SAMPLES = 200
 
 
 def _preprocessor(numeric: list[str], categorical: list[str], scale: bool) -> ColumnTransformer:
@@ -74,19 +77,41 @@ def _propensity_weights(train: pd.DataFrame) -> tuple[Pipeline | None, np.ndarra
     actions = train["real_buy_action"].astype(str)
     if actions.nunique() < 2:
         return None, np.ones(len(train)), {"available": False, "reason": "single_action"}
-    propensity = Pipeline([
-        ("prepare", _preprocessor(PREBUY_NUMERIC_FEATURES, PREBUY_CATEGORICAL_FEATURES, True)),
-        ("model", LogisticRegression(max_iter=1500, class_weight="balanced")),
-    ])
+    def build() -> Pipeline:
+        return Pipeline([
+            ("prepare", _preprocessor(PREBUY_NUMERIC_FEATURES, PREBUY_CATEGORICAL_FEATURES, True)),
+            ("model", LogisticRegression(max_iter=1500)),
+        ])
+    ordered_matches = (train[["match_id", "game_start_millis"]].drop_duplicates("match_id")
+                       .sort_values(["game_start_millis", "match_id"]))
+    chunks = [list(chunk) for chunk in np.array_split(ordered_matches["match_id"].to_numpy(), 5) if len(chunk)]
+    observed = np.full(len(train), np.nan, dtype=float)
+    for fold in range(1, len(chunks)):
+        fit_ids = {item for chunk in chunks[:fold] for item in chunk}
+        validation_ids = set(chunks[fold])
+        fit_mask = train["match_id"].isin(fit_ids)
+        validation_mask = train["match_id"].isin(validation_ids)
+        fit_actions = actions.loc[fit_mask]
+        if fit_actions.nunique() < 2:
+            continue
+        cross_fitted = build()
+        cross_fitted.fit(train.loc[fit_mask, PROPENSITY_FEATURES], fit_actions)
+        probabilities = cross_fitted.predict_proba(train.loc[validation_mask, PROPENSITY_FEATURES])
+        classes = list(cross_fitted.named_steps["model"].classes_)
+        positions = np.flatnonzero(validation_mask.to_numpy())
+        for row_position, probability_row in zip(positions, probabilities):
+            action = actions.iloc[row_position]
+            observed[row_position] = probability_row[classes.index(action)] if action in classes else MIN_PROPENSITY
+    propensity = build()
     propensity.fit(train[PROPENSITY_FEATURES], actions)
-    probabilities = propensity.predict_proba(train[PROPENSITY_FEATURES])
     classes = list(propensity.named_steps["model"].classes_)
-    observed = np.array([probabilities[index, classes.index(action)] for index, action in enumerate(actions)])
     marginal = actions.value_counts(normalize=True).to_dict()
-    stabilized = np.array([marginal[action] / max(observed[index], 0.01) for index, action in enumerate(actions)])
+    missing_oof = np.isnan(observed)
+    observed[missing_oof] = np.array([marginal[action] for action in actions.to_numpy()[missing_oof]])
+    stabilized = np.array([marginal[action] / max(observed[index], MIN_PROPENSITY) for index, action in enumerate(actions)])
     weights = np.clip(stabilized, 0.1, MAX_IPW_WEIGHT)
     action_support = actions.value_counts().astype(int).to_dict()
-    clipping_rate = float((stabilized > MAX_IPW_WEIGHT).mean())
+    clipping_rate = float(((stabilized > MAX_IPW_WEIGHT) | (stabilized < 0.1)).mean())
     effective_sample_size = float((weights.sum() ** 2) / np.square(weights).sum()) if len(weights) else 0.0
     propensity_by_action = {
         str(action): {
@@ -100,15 +125,20 @@ def _propensity_weights(train: pd.DataFrame) -> tuple[Pipeline | None, np.ndarra
     return propensity, weights, {
         "available": True, "classes": classes,
         "min_observed_probability": float(observed.min()),
+        "max_observed_probability": float(observed.max()),
+        "observed_probability_percentiles": {str(p): float(np.percentile(observed, p)) for p in (1, 5, 25, 50, 75, 95, 99)},
         "max_weight": float(weights.max()),
+        "weight_percentiles": {str(p): float(np.percentile(weights, p)) for p in (1, 5, 25, 50, 75, 95, 99)},
         "clipping_rate": clipping_rate,
         "effective_sample_size": effective_sample_size,
+        "oof_coverage": float((~missing_oof).mean()),
+        "cross_fitting": "expanding_temporal_match_grouped",
         "propensity_by_action": propensity_by_action,
         "low_support_actions": {
             action: count for action, count in action_support.items()
             if count < MIN_ACTION_SUPPORT
         },
-        "aipw_status": "not_implemented_experimental_placeholder",
+        "estimator_kind": "stabilized_ipw_observational_not_causal",
     }
 
 
@@ -119,20 +149,32 @@ MODEL_LABELS = {
 }
 
 
-def _calibrate(raw_pipeline: Pipeline, calibration: pd.DataFrame, label: str) -> LogisticRegression | None:
+def _apply_calibrator(calibrator: Any, raw: np.ndarray) -> np.ndarray:
+    if calibrator is None:
+        return raw
+    if hasattr(calibrator, "predict_proba"):
+        return calibrator.predict_proba(raw.reshape(-1, 1))[:, 1]
+    return np.asarray(calibrator.predict(raw), dtype=float)
+
+
+def _calibration_candidates(raw_pipeline: Pipeline, calibration: pd.DataFrame, label: str) -> list[tuple[str, Any, dict]]:
     if calibration.empty or calibration[label].nunique() < 2:
-        return None
-    raw = raw_pipeline.predict_proba(calibration[MODEL_FEATURES])[:, 1].reshape(-1, 1)
-    calibrator = LogisticRegression()
-    calibrator.fit(raw, calibration[label])
-    return calibrator
+        return [("none", None, {})]
+    raw = raw_pipeline.predict_proba(calibration[MODEL_FEATURES])[:, 1]
+    candidates: list[tuple[str, Any]] = [("none", None)]
+    sigmoid = LogisticRegression().fit(raw.reshape(-1, 1), calibration[label])
+    candidates.append(("sigmoid", sigmoid))
+    if len(calibration) >= MIN_ISOTONIC_SAMPLES and calibration[label].value_counts().min() >= 30:
+        candidates.append(("isotonic", IsotonicRegression(out_of_bounds="clip").fit(raw, calibration[label])))
+    return [(name, calibrator, classification_metrics(calibration[label], _apply_calibrator(calibrator, raw)))
+            for name, calibrator in candidates]
 
 
 def _predict(bundle: dict, frame: pd.DataFrame, model_key: str = "match_win_model") -> np.ndarray:
     model_bundle = (bundle.get("models") or {}).get(model_key) or bundle
     raw = model_bundle["pipeline"].predict_proba(frame[MODEL_FEATURES])[:, 1]
     calibrator = model_bundle.get("calibrator")
-    return calibrator.predict_proba(raw.reshape(-1, 1))[:, 1] if calibrator else raw
+    return _apply_calibrator(calibrator, raw)
 
 
 def _fit_binary_model(
@@ -144,23 +186,36 @@ def _fit_binary_model(
 ) -> tuple[dict | None, dict | None]:
     if train[label].nunique() < 2 or test.empty or test[label].nunique() < 1:
         return None, None
-    baseline = Pipeline([
+    candidates = {"logistic_regression": Pipeline([
         ("prepare", _preprocessor(NUMERIC_FEATURES, CATEGORICAL_FEATURES, True)),
         ("model", LogisticRegression(max_iter=1500)),
-    ])
-    baseline.fit(train[MODEL_FEATURES], train[label], model__sample_weight=weights)
-    pipeline = Pipeline([
+    ]), "hist_gradient_boosting": Pipeline([
         ("prepare", _preprocessor(NUMERIC_FEATURES, CATEGORICAL_FEATURES, False)),
         ("model", HistGradientBoostingClassifier(random_state=42)),
-    ])
-    pipeline.fit(train[MODEL_FEATURES], train[label], model__sample_weight=weights)
-    calibrator = _calibrate(pipeline, calibration, label)
-    raw_bundle = {"pipeline": pipeline, "calibrator": calibrator}
+    ])}
+    evaluated = []
+    for name, pipeline in candidates.items():
+        pipeline.fit(train[MODEL_FEATURES], train[label], model__sample_weight=weights)
+        for calibration_name, calibrator, calibration_metrics in _calibration_candidates(pipeline, calibration, label):
+            evaluated.append({"name": name, "pipeline": pipeline, "calibration": calibration_name,
+                              "calibrator": calibrator, "calibration_metrics": calibration_metrics})
+    def selection_key(item: dict) -> tuple:
+        metrics = item["calibration_metrics"]
+        return (metrics.get("log_loss", float("inf")), metrics.get("brier_score", float("inf")),
+                metrics.get("expected_calibration_error", float("inf")), -(metrics.get("roc_auc") or 0.0))
+    selected = min(evaluated, key=selection_key)
+    raw_bundle = {"pipeline": selected["pipeline"], "calibrator": selected["calibrator"],
+                  "selected_model": selected["name"], "calibration_method": selected["calibration"]}
     probabilities = _predict(raw_bundle, test, "match_win_model")
-    baseline_probabilities = baseline.predict_proba(test[MODEL_FEATURES])[:, 1]
+    prevalence = float(train[label].mean())
+    baseline_probabilities = np.full(len(test), prevalence)
     metrics = classification_metrics(test[label], probabilities)
     metrics["baseline_global"] = classification_metrics(test[label], baseline_probabilities)
-    metrics["calibrated"] = calibrator is not None
+    metrics["selected_model"] = selected["name"]
+    metrics["selection_criterion"] = "calibration_log_loss_then_brier_then_ece_then_roc_auc"
+    metrics["calibration_method"] = selected["calibration"]
+    metrics["candidates"] = [{"model": item["name"], "calibration": item["calibration"],
+                               "calibration_metrics": item["calibration_metrics"]} for item in evaluated]
     return raw_bundle, metrics
 
 
@@ -202,6 +257,12 @@ def _fit_scope(
     probabilities = _predict(bundle, test, "match_win_model")
     metrics = evaluate_slices(test, probabilities)
     metrics["models"] = model_metrics
+    bundle["metrics"] = metrics
+    bundle["train_matches"] = int(train["match_id"].nunique())
+    bundle["calibration_matches"] = int(calibration["match_id"].nunique())
+    bundle["test_matches"] = int(test["match_id"].nunique())
+    bundle["selected_model"] = fitted_models["match_win_model"].get("selected_model")
+    bundle["calibration_method"] = fitted_models["match_win_model"].get("calibration_method")
     model_registry.save_model(bundle, scope, value, artifacts_dir)
     return {
         "samples": len(frame), "train_samples": len(train), "calibration_samples": len(calibration),
@@ -231,7 +292,9 @@ def train_models(dataset: pd.DataFrame, *, enforce_minimums: bool = True) -> dic
     training_match_ids = sorted(str(value) for value in dataset["match_id"].dropna().unique())
     metadata = {
         "schema_version": SCHEMA_VERSION, "created_at": datetime.now(timezone.utc).isoformat(),
-        "dataset_rows": len(dataset), "features": MODEL_FEATURES,
+        "dataset_rows": len(dataset), "dataset_matches": int(dataset["match_id"].nunique()),
+        "features": MODEL_FEATURES, "feature_version": f"economy-features-v{SCHEMA_VERSION}",
+        "feature_groups": {"state": STATE_FEATURES, "action": ACTION_FEATURES, "labels": LABEL_COLUMNS},
         "training_match_ids": training_match_ids,
         "categorical_features": CATEGORICAL_FEATURES, "numeric_features": NUMERIC_FEATURES,
         "includes_agent_utility": True,

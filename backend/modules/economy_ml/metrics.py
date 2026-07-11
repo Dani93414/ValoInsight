@@ -4,7 +4,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (accuracy_score, average_precision_score, brier_score_loss,
+                             log_loss, roc_auc_score)
+
+MIN_SLICE_SAMPLES = 30
 
 
 def expected_calibration_error(y_true: Any, probabilities: Any, bins: int = 10) -> float:
@@ -32,6 +36,14 @@ def classification_metrics(y_true: Any, probabilities: Any) -> dict:
         "positive_rate": float(truth.mean()) if len(truth) else 0.0,
     }
     result["roc_auc"] = float(roc_auc_score(truth, probs)) if len(set(truth)) > 1 else None
+    result["pr_auc"] = float(average_precision_score(truth, probs)) if len(set(truth)) > 1 else None
+    result["calibration_slope"] = None
+    result["calibration_intercept"] = None
+    if len(set(truth)) > 1 and len(truth) >= 10:
+        logits = np.log(probs / (1 - probs)).reshape(-1, 1)
+        calibration = LogisticRegression(C=1e6, solver="lbfgs").fit(logits, truth)
+        result["calibration_slope"] = float(calibration.coef_[0, 0])
+        result["calibration_intercept"] = float(calibration.intercept_[0])
     return result
 
 
@@ -49,7 +61,11 @@ def evaluate_slices(frame: pd.DataFrame, probabilities: Any) -> dict:
         if column not in evaluated:
             continue
         result[column] = {
-            str(value): classification_metrics(group["match_won"], group["_probability"])
+            str(value): {
+                **classification_metrics(group["match_won"], group["_probability"]),
+                "reliable": len(group) >= MIN_SLICE_SAMPLES,
+                "warning": None if len(group) >= MIN_SLICE_SAMPLES else "slice_too_small",
+            }
             for value, group in evaluated.groupby(column, dropna=False)
         }
     binary_slices = {
