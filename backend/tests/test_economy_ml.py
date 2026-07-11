@@ -343,7 +343,7 @@ class EconomyMlTests(unittest.TestCase):
         self.assertNotIn("team_player_credit_estimates", PREBUY_NUMERIC_FEATURES)
 
     def test_schema_version_10(self):
-        self.assertEqual(SCHEMA_VERSION, 10)
+        self.assertEqual(SCHEMA_VERSION, 11)
 
     def test_content_taxonomy_knows_bandit_and_regen_shield(self):
         self.assertEqual(weapon_role({"displayName": "Bandit"}), "sidearm")

@@ -520,7 +520,7 @@ class EconomyEngineV10Tests(unittest.TestCase):
         self.assertEqual(fixed_round_start_credits(25), 5000)
 
     def test_no_observed_post_buy_labels_in_model_features(self):
-        self.assertEqual(SCHEMA_VERSION, 10)
+        self.assertEqual(SCHEMA_VERSION, 11)
         leaked = {"target_loadout_case", "cashflow_case", "enemy_target_loadout_case", "enemy_cashflow_case"}
         self.assertTrue(leaked.issubset(FORBIDDEN_FEATURES))
         self.assertTrue(leaked.isdisjoint(MODEL_FEATURES))

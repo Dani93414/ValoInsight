@@ -9,6 +9,7 @@ from modules.economy_ml.round_win_dataset import (ROUND_WIN_FEATURES, build_roun
                                                    validate_round_win_dataset)
 from modules.economy_ml.round_win_model import RoundWinLoadoutModel, validate_round_win_features
 from modules.economy_ml.train_round_win_model import train_round_win_model
+from modules.economy_ml.train import _temporal_split
 
 
 class RoundWinModelTests(unittest.TestCase):
@@ -72,6 +73,25 @@ class RoundWinModelTests(unittest.TestCase):
             artifact = Path(directory) / "round_win_v1.joblib"
             joblib.dump({"feature_version": "round-win-loadout-v1", "pipeline": object()}, artifact)
             self.assertFalse(RoundWinLoadoutModel(artifact).available())
+
+    def test_split_keeps_matches_disjoint_and_temporal(self):
+        dataset = build_round_win_dataset(self._source(100))
+        train, calibration, test = _temporal_split(dataset)
+        self.assertTrue(set(train.match_id).isdisjoint(calibration.match_id))
+        self.assertTrue(set(train.match_id).isdisjoint(test.match_id))
+        self.assertTrue(set(calibration.match_id).isdisjoint(test.match_id))
+        self.assertLess(train.game_start_millis.max(), calibration.game_start_millis.min())
+        self.assertLess(calibration.game_start_millis.max(), test.game_start_millis.min())
+
+    def test_action_values_do_not_double_count_armor(self):
+        source = self._source(2)
+        source["action_total_loadout_value"] = 10000
+        source["action_armor_value"] = 5000
+        source["action_utility_value"] = 1000
+        dataset = build_round_win_dataset(source)
+        self.assertEqual(dataset.iloc[0]["team_weapon_value"], 4000)
+        self.assertEqual(dataset.iloc[0]["team_armor_value"], 5000)
+        self.assertEqual(dataset.iloc[0]["team_utility_value"], 1000)
 
 
 if __name__ == "__main__":
