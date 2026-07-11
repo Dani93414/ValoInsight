@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_VERSION = "round-win-loadout-v2"
+FEATURE_VERSION = "round-win-loadout-v3"
 FORBIDDEN_ROUND_WIN_FEATURES = {
     "current_round_kills", "current_round_damage", "current_round_plant",
     "current_round_defuse", "current_round_result", "post_round_score",
@@ -62,6 +62,12 @@ class RoundWinLoadoutModel:
                 probability = float(estimator.predict_proba(values)[0][-1])
             else:
                 probability = float(estimator.predict(values)[0])
+            calibrator = bundle.get("calibrator")
+            if calibrator is not None:
+                if hasattr(calibrator, "predict_proba"):
+                    probability = float(calibrator.predict_proba([[probability]])[0, 1])
+                else:
+                    probability = float(calibrator.predict([probability])[0])
             return {"available": True, "round_win_probability": max(0.0, min(1.0, probability)),
                     "confidence": float(bundle.get("confidence") or .7),
                     "model_scope": str(bundle.get("model_scope") or "global"),
