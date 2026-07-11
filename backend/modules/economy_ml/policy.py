@@ -8,6 +8,7 @@ from .action_profiles import minimum_action_credits, simulate_action_features
 from .buy_classifier import BUY_ACTIONS
 from .config import MIN_PROPENSITY
 from .economy_rules import is_pistol_round, pistol_action_guardrail
+from .economy_cases import classify_economy_case
 from .model_registry import load_model_candidates
 from .plan_allocator import allocate_player_loadouts
 from .schemas import MODEL_FEATURES, PROPENSITY_FEATURES
@@ -98,7 +99,23 @@ def _predict_probability(bundle: dict, scenario: dict, model_key: str = "match_w
     calibrator = model_bundle.get("calibrator")
     if calibrator is None:
         return raw
-    return float(calibrator.predict_proba([[raw]])[0, 1])
+    if hasattr(calibrator, "predict_proba"):
+        return float(calibrator.predict_proba([[raw]])[0, 1])
+    return float(calibrator.predict([raw])[0])
+
+
+def _bundle_quality(bundle: dict) -> tuple[bool, float]:
+    metrics = bundle.get("metrics") or {}
+    primary = metrics.get("match_win_model") or metrics
+    test_matches = int(bundle.get("test_matches") or bundle.get("dataset_quality", {}).get("test_matches") or 0)
+    logloss = primary.get("log_loss")
+    brier = primary.get("brier_score")
+    ece = primary.get("expected_calibration_error")
+    if test_matches and test_matches < 5:
+        return False, float("-inf")
+    if any(value is None for value in (logloss, brier, ece)):
+        return True, -1.0
+    return True, -(float(logloss) + float(brier) + float(ece))
 
 
 def _utility_explanations(state: dict) -> list[str]:
@@ -138,6 +155,7 @@ def _recommend_with_bundle(
             scenario = {feature: state.get(feature) for feature in MODEL_FEATURES}
             scenario.update(simulate_action_features(state, action))
             scenario["buy_action"] = action
+            scenario.update(classify_economy_case(state, action))
             probability = _predict_probability(bundle, scenario, "match_win_model")
             round_probability = _predict_probability(bundle, scenario, "round_win_model")
             fullbuy_probability = _predict_probability(bundle, scenario, "fullbuy_next_round_model")
@@ -288,7 +306,10 @@ def recommend_economy_action(
     if not candidates:
         return {"available": False, "reason": "No hay modelo compatible entrenado todavía"}
     actions = available_actions or [action for action in BUY_ACTIONS if action != "UNKNOWN"]
-    for bundle, scope in candidates:
+    ranked = sorted(candidates, key=lambda item: _bundle_quality(item[0])[1], reverse=True)
+    for bundle, scope in ranked:
+        if not _bundle_quality(bundle)[0]:
+            continue
         recommendation = _recommend_with_bundle(state, actions, bundle, scope, match=match)
         if recommendation:
             return recommendation

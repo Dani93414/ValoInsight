@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 LABEL_COLUMNS = [
     "round_won", "match_won", "next_round_fullbuy_possible",
     "next_round_team_estimated_credits",
@@ -13,8 +13,7 @@ PREBUY_CATEGORICAL_FEATURES = [
     "team_credit_estimate_quality", "enemy_credit_estimate_quality",
     "team_previous_round_reconciliation_quality", "enemy_previous_round_reconciliation_quality",
     "team_drop_reconciliation_status", "enemy_drop_reconciliation_status",
-    "credit_estimate_quality",
-    "macro_buy_case", "economy_intent", "round_context_case",
+    "credit_estimate_quality", "round_context_case",
 ]
 PREBUY_NUMERIC_FEATURES = [
     "round_number", "is_ranked", "rank_tier_avg", "rank_tier_median",
@@ -95,7 +94,8 @@ PREBUY_NUMERIC_FEATURES += AGENT_UTILITY_NUMERIC_FEATURES
 # These describe the chosen intervention. For historical rows they come from the
 # observed post-buy loadout. For alternatives they are generated coherently.
 ACTION_NUMERIC_FEATURES = [
-    "action_total_loadout", "action_total_remaining",
+    "action_weapon_value", "action_armor_value", "action_utility_value",
+    "action_total_loadout_value", "action_total_spend", "action_expected_remaining",
     "action_heavy_armor_count", "action_regen_armor_count",
     "action_light_armor_count", "action_no_armor_count",
     "action_rifle_count", "action_smg_count", "action_sniper_count",
@@ -120,10 +120,13 @@ PLAYER_AGGREGATE_FEATURES = [
 
 UTILITY_FEATURES = AGENT_UTILITY_NUMERIC_FEATURES
 
-CATEGORICAL_FEATURES = PREBUY_CATEGORICAL_FEATURES + ["buy_action"]
+ACTION_CATEGORICAL_FEATURES = ["buy_action", "macro_buy_case", "economy_intent"]
+STATE_FEATURES = PREBUY_NUMERIC_FEATURES + PREBUY_CATEGORICAL_FEATURES
+ACTION_FEATURES = ACTION_NUMERIC_FEATURES + ACTION_CATEGORICAL_FEATURES
+CATEGORICAL_FEATURES = PREBUY_CATEGORICAL_FEATURES + ACTION_CATEGORICAL_FEATURES
 NUMERIC_FEATURES = PREBUY_NUMERIC_FEATURES + ACTION_NUMERIC_FEATURES
-MODEL_FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
-PROPENSITY_FEATURES = PREBUY_NUMERIC_FEATURES + PREBUY_CATEGORICAL_FEATURES
+MODEL_FEATURES = STATE_FEATURES + ACTION_FEATURES
+PROPENSITY_FEATURES = list(STATE_FEATURES)
 
 # Explicit audit list: these must never enter either model.
 FORBIDDEN_FEATURES = {
@@ -137,6 +140,7 @@ FORBIDDEN_FEATURES = {
     # emitted for post-match analysis, but are not realistic pre-buy inputs.
     "target_loadout_case", "cashflow_case", "enemy_target_loadout_case",
     "enemy_cashflow_case",
+    "real_buy_action",
 }
 
 POST_ROUND_ONLY_COLUMNS = {
@@ -155,8 +159,22 @@ def validate_no_feature_leakage(features: list[str] | None = None) -> dict:
     checked = set(features or MODEL_FEATURES)
     forbidden = sorted(checked.intersection(FORBIDDEN_FEATURES))
     post_round = sorted(checked.intersection(POST_ROUND_ONLY_COLUMNS))
+    labels = sorted(checked.intersection(LABEL_COLUMNS))
     return {
-        "valid": not forbidden and not post_round,
+        "valid": not forbidden and not post_round and not labels,
         "forbidden_features": forbidden,
         "post_round_only_features": post_round,
+        "label_features": labels,
     }
+
+
+def validate_feature_contract() -> dict:
+    overlaps = {
+        "state_action": sorted(set(STATE_FEATURES).intersection(ACTION_FEATURES)),
+        "state_labels": sorted(set(STATE_FEATURES).intersection(LABEL_COLUMNS)),
+        "action_labels": sorted(set(ACTION_FEATURES).intersection(LABEL_COLUMNS)),
+        "propensity_action": sorted(set(PROPENSITY_FEATURES).intersection(ACTION_FEATURES)),
+    }
+    leakage = validate_no_feature_leakage(MODEL_FEATURES)
+    return {"valid": leakage["valid"] and not any(overlaps.values()),
+            "overlaps": overlaps, "leakage": leakage}

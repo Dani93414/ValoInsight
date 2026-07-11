@@ -34,7 +34,15 @@ def observed_action_features(economies: list[dict]) -> dict[str, float | int]:
     light = sum(is_light_armor(armor) for armor in armors)
     regen = sum(is_regen_armor(armor) for armor in armors)
     strong_armor = heavy + regen
+    total_loadout = sum(number(e.get("loadoutValue")) for e in economies)
+    armor_value = heavy * 1000 + regen * 650 + light * 400
+    total_spend = sum(number(e.get("spent")) for e in economies)
+    remaining = sum(number(e.get("remaining")) for e in economies)
     return {
+        "action_weapon_value": max(0.0, total_loadout - armor_value),
+        "action_armor_value": armor_value, "action_utility_value": 0.0,
+        "action_total_loadout_value": total_loadout, "action_total_spend": total_spend,
+        "action_expected_remaining": remaining,
         "action_total_loadout": sum(number(e.get("loadoutValue")) for e in economies),
         "action_total_spent": sum(number(e.get("spent")) for e in economies),
         "action_total_remaining": sum(number(e.get("remaining")) for e in economies),
@@ -61,7 +69,13 @@ def simulate_action_features(state: dict[str, Any], action: str) -> dict[str, fl
     count = lambda key: int(round(float(template.get(key, 0)) * ratio))
     heavy, regen, light = count("heavy"), count("regen"), count("light")
     operator, outlaw, marshal = count("operator"), count("outlaw"), count("marshal")
+    total_loadout = min(credits, float(template["loadout"]))
+    armor_value = heavy * 1000 + regen * 650 + light * 400
     return {
+        "action_weapon_value": max(0.0, total_loadout - armor_value),
+        "action_armor_value": armor_value, "action_utility_value": 0.0,
+        "action_total_loadout_value": total_loadout, "action_total_spend": spend,
+        "action_expected_remaining": max(0.0, credits - spend),
         "action_total_loadout": min(credits, float(template["loadout"])),
         "action_total_spent": spend, "action_total_remaining": max(0.0, credits - spend),
         "action_heavy_armor_count": heavy, "action_regen_armor_count": regen,
