@@ -123,6 +123,15 @@ export const HEADER_AGENT_IMAGE_ADJUSTMENTS_BY_DISPLAY_NAME: Record<
     fadeEnd: 88,
     flip: true,
   },
+    miks: {
+    objX: 77,
+    scale: 1.26,
+    shiftY: -8,
+    fadeStart: 82,
+    fadeMid: 84,
+    fadeEnd: 88,
+    flip: false,
+  },
   raze: {
     objX: 79,
     scale: 1.35,

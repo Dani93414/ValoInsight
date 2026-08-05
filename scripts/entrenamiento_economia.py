@@ -26,6 +26,10 @@ from modules.economy_ml.round_win_dataset import build_round_win_dataset  # noqa
 from modules.economy_ml.train_round_win_model import train_round_win_model  # noqa: E402
 from modules.matches.infrastructure import mongo_match_repo  # noqa: E402
 
+CANDIDATE_DATASET_PATH = (
+    BACKEND_ROOT / "modules" / "economy_ml" / "artifacts"
+    / "v12_candidate" / "economy_round_dataset.parquet"
+)
 
 def _print_validation(validation: dict) -> None:
     print("Validacion del dataset:")
@@ -89,6 +93,11 @@ def main() -> int:
         action="store_true",
         help="Permite intentar entrenar aunque validate_dataset marque invalid.",
     )
+    parser.add_argument(
+        "--scoped-models",
+        action="store_true",
+        help="Entrena además modelos separados por rango; es más lento y no es necesario para v12.",
+    )
     args = parser.parse_args()
 
     print("Leyendo partidas desde MongoDB...")
@@ -124,18 +133,18 @@ def main() -> int:
         return 0
 
     print("Guardando dataset parquet...")
-    save_dataset(dataset)
+    save_dataset(dataset, CANDIDATE_DATASET_PATH)
 
-    print("Entrenando modelos y publicando artefactos...")
+    print("Entrenando modelos y guardando artefactos candidatos v12...")
     try:
-        metadata = train_models(dataset)
+        metadata = train_models(dataset, train_scoped_models=args.scoped_models)
     except ValueError as exc:
         print(f"No se pudo entrenar el modelo: {exc}")
         print("Los modelos anteriores se conservan si existian.")
         return 1
 
     _print_training_summary(metadata)
-    print("Entrenando modelo opcional de victoria por loadout...")
+    print("Entrenando modelo opcional de victoria por equipamiento...")
     round_win_result = train_round_win_model(build_round_win_dataset(dataset))
     if round_win_result.get("available"):
         print(f"  artifact: {round_win_result.get('artifact_path')}")

@@ -21,8 +21,10 @@ from modules.players.application.rank_resolution import (
 
 _DASHBOARD_CONTENT_CACHE: tuple[float, dict[str, Any]] | None = None
 _DASHBOARD_RESPONSE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_RANK_COMPARISON_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _DASHBOARD_CONTENT_CACHE_TTL_SECONDS = 300.0
 _DASHBOARD_RESPONSE_CACHE_TTL_SECONDS = 120.0
+_RANK_COMPARISON_CACHE_TTL_SECONDS = 600.0
 _CACHE_LOCK = threading.Lock()
 
 
@@ -1375,19 +1377,22 @@ def _load_match_duration_map(match_ids: list[str]) -> dict[str, int]:
 
 
 def _extract_side_stats(side_data: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "rounds": int(side_data.get("rounds") or 0),
-        "wins": int(side_data.get("wins") or 0),
-        "kills": int(side_data.get("kills") or 0),
-        "deaths": int(side_data.get("deaths") or 0),
-        "assists": int(side_data.get("assists") or 0),
-        "score": int(side_data.get("score") or 0),
-        "damage_dealt": int(side_data.get("damage_dealt") or 0),
-        "damage_received": int(side_data.get("damage_received") or 0),
-        "headshots": int(side_data.get("headshots") or 0),
-        "bodyshots": int(side_data.get("bodyshots") or 0),
-        "legshots": int(side_data.get("legshots") or 0),
-    }
+    # Do not forward nested weapon/economy structures for every side. The UI
+    # consumes these counters and derived values only; the full weapon detail
+    # remains available in overview.weapon_stats.
+    fields = (
+        "rounds", "wins", "kills", "deaths", "assists", "score",
+        "damage_dealt", "damage_received", "headshots", "bodyshots", "legshots",
+        "acs", "adr", "kd_ratio", "headshot_pct", "first_kills", "first_deaths",
+        "rounds_with_kill", "rounds_with_assist", "rounds_with_death",
+        "rounds_with_direct_participation",
+        "rounds_without_direct_participation",
+        "rounds_only_kill", "rounds_only_assist", "rounds_only_death",
+        "rounds_kill_assist", "rounds_kill_death", "rounds_assist_death",
+        "rounds_kill_assist_death", "rounds_none", "rounds_combined_or_none",
+        "rounds_with_multikill", "multi_2k", "multi_3k", "multi_4k", "multi_5k",
+    )
+    return {field: side_data.get(field) for field in fields if field in side_data}
 
 
 def _extract_sides_summary(doc: dict[str, Any]) -> dict[str, Any] | None:
@@ -1568,6 +1573,22 @@ def _build_light_analytics_list(
         player_totals = doc.get("player_totals_from_match") or {}
         normalized_rounds = _normalize_round_overview(overview)
 
+        compact_weapon_fields = (
+            "weapon_id", "weapon_name", "key", "is_armor", "rounds",
+            "rounds_equipped", "wins", "kills", "deaths", "assists",
+            "damage_dealt", "damage_received", "survival_rounds",
+            "loadout_value_total", "headshots", "bodyshots", "legshots",
+        )
+        compact_weapons = [
+            {
+                field: weapon.get(field)
+                for field in compact_weapon_fields
+                if field in weapon
+            }
+            for weapon in _normalize_weapon_stats(overview.get("weapon_stats"))
+            if isinstance(weapon, dict)
+        ]
+
         light_docs.append(
             {
                 "id": _build_match_card_id(doc),
@@ -1605,7 +1626,7 @@ def _build_light_analytics_list(
                     "defuses_per_opportunity_pct": normalized_rounds.get(
                         "defuses_per_opportunity_pct"
                     ),
-                    "weapon_stats": _normalize_weapon_stats(overview.get("weapon_stats")),
+                    "weapon_stats": compact_weapons,
                     # Tactical / advanced fields
                     "first_kills": overview.get("first_kills"),
                     "first_deaths": overview.get("first_deaths"),
@@ -1702,7 +1723,7 @@ def _build_light_analytics_list(
                         "kill_assist_survive_trade_pct"
                     ),
                 },
-                "sides": doc.get("sides"),
+                "sides": _extract_sides_summary(doc),
                 "player_totals_from_match": {
                     "kills": player_totals.get("kills"),
                     "deaths": player_totals.get("deaths"),
@@ -2386,7 +2407,7 @@ def aggregate_rank_cohort_players_by_reference_tier(
     return cohort_rows
 
 
-def get_player_rank_comparison(
+def _compute_player_rank_comparison(
     puuid: str,
     *,
     queue_id: str | None = None,
@@ -2486,6 +2507,47 @@ def get_player_rank_comparison(
         extra_fields=extra_fields,
         extra_notes=extra_notes,
     )
+
+
+def get_player_rank_comparison(
+    puuid: str,
+    *,
+    queue_id: str | None = None,
+    agent_id: str | None = None,
+    map_name: str | None = None,
+    season_id: str | None = None,
+    party_size: str | None = None,
+) -> dict[str, Any]:
+    cache_key = "|".join(
+        str(value or "")
+        for value in (
+            puuid,
+            queue_id,
+            agent_id,
+            map_name,
+            season_id,
+            party_size,
+        )
+    )
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _RANK_COMPARISON_CACHE.get(cache_key)
+        if cached and (now - cached[0]) <= _RANK_COMPARISON_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    payload = _compute_player_rank_comparison(
+        puuid,
+        queue_id=queue_id,
+        agent_id=agent_id,
+        map_name=map_name,
+        season_id=season_id,
+        party_size=party_size,
+    )
+    with _CACHE_LOCK:
+        if len(_RANK_COMPARISON_CACHE) > 1000:
+            _RANK_COMPARISON_CACHE.clear()
+        _RANK_COMPARISON_CACHE[cache_key] = (now, payload)
+    return payload
 
 
 def build_player_dashboard(
@@ -2910,17 +2972,32 @@ def _extract_flat_analytics_docs(puuid: str, matches_cursor) -> list[dict[str, A
                 continue
             player_stats = player.get("stats") or {}
             overview = dict(analytics.get("overview") or {})
-            round_overview = _compute_round_overview_from_round_results(match_obj, puuid)
-            if round_overview:
-                overview.update(round_overview)
-            overview["weapon_stats"] = merge_precise_weapon_core_stats(
-                overview.get("weapon_stats"),
-                compute_precise_weapon_stats_core(
-                    match_obj.get("roundResults") or [],
-                    puuid,
-                    build_team_lookup(match_obj.get("players") or []),
-                ),
+            # Modern ingested matches already contain the complete analytics.
+            # Rebuilding every round and weapon on every GET made large
+            # profiles scale linearly to tens of seconds. Keep compatibility
+            # with old documents by calculating only when those aggregates are
+            # absent.
+            has_round_analytics = (
+                overview.get("rounds") is not None
+                and overview.get("rounds_with_kill") is not None
+                and overview.get("rounds_with_direct_participation") is not None
             )
+            if not has_round_analytics:
+                round_overview = _compute_round_overview_from_round_results(
+                    match_obj,
+                    puuid,
+                )
+                if round_overview:
+                    overview.update(round_overview)
+            if not overview.get("weapon_stats"):
+                overview["weapon_stats"] = merge_precise_weapon_core_stats(
+                    overview.get("weapon_stats"),
+                    compute_precise_weapon_stats_core(
+                        match_obj.get("roundResults") or [],
+                        puuid,
+                        build_team_lookup(match_obj.get("players") or []),
+                    ),
+                )
             player_team_id = str(player.get("teamId") or "").lower()
             team_agents: list[dict[str, Any]] = []
             if player_team_id:

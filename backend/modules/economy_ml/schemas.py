@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 LABEL_COLUMNS = [
     "round_won", "match_won", "next_round_fullbuy_possible",
     "next_round_team_estimated_credits",
@@ -21,9 +21,9 @@ PREBUY_NUMERIC_FEATURES = [
     "win_streak", "loss_streak", "enemy_win_streak", "enemy_loss_streak",
     "is_pistol_round", "is_second_round", "is_bonus_candidate",
     "is_last_round_before_switch", "is_match_point", "is_overtime",
-    "prebuy_credits_observed", "prebuy_credits_rules", "prebuy_credits_selected",
-    "team_prebuy_credits_observed", "team_prebuy_credits_rules", "team_prebuy_credits_selected",
-    "enemy_prebuy_credits_observed", "enemy_prebuy_credits_rules", "enemy_prebuy_credits_selected",
+    "prebuy_credits_rules", "prebuy_credits_selected",
+    "team_prebuy_credits_rules", "team_prebuy_credits_selected",
+    "enemy_prebuy_credits_rules", "enemy_prebuy_credits_selected",
     "team_estimated_credits_before_buy", "enemy_estimated_credits_before_buy",
     "credits_before_buy_diff", "team_players_can_full_buy_estimate",
     "enemy_players_can_full_buy_estimate", "team_players_low_money",
@@ -141,6 +141,7 @@ FORBIDDEN_FEATURES = {
     "target_loadout_case", "cashflow_case", "enemy_target_loadout_case",
     "enemy_cashflow_case",
     "real_buy_action",
+    "spent", "econ_spent", "player_spent", "team_spent_observed",
 }
 
 POST_ROUND_ONLY_COLUMNS = {

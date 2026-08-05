@@ -4,13 +4,13 @@ Motor player-first de recomendacion economica para VALORANT. La legalidad,
 inventario individual, drops y economia futura gobiernan la decision. El ML es
 un estimador auxiliar y nunca puede convertir un plan ilegal en viable.
 
-La respuesta conserva `engine: player_first_v10` por compatibilidad y declara
-`advanced_engine: player_first_v11_contextual`. Esta fase se considera
-`player_first_v11_contextual_stable`. V11 no sustituye las reglas:
-anade ajustes pequenos despues de que el plan haya superado generacion y
-validacion legal. Si una fuente avanzada falta, devuelve `available: false`,
-`confidence: 0`, `source: unavailable` y warnings tecnicos sin bloquear el
-endpoint.
+El contrato actual publica `economy_contract_version: 12` y
+`engine: player_first_v12_decision_grade`. Las reglas, el inventario y la
+legalidad son autoritativos. El ML solo puede modificar una recomendacion si
+su politica fue validada fuera de muestra; en caso contrario se abstiene y el
+solver determinista sigue funcionando. Si una fuente avanzada falta, devuelve
+`available: false`, `confidence: 0`, `source: unavailable` y warnings tecnicos
+sin bloquear el endpoint.
 
 ## Contexto Avanzado V11
 
@@ -40,8 +40,9 @@ sincrona actual.
 historicos como tratamiento y labels `round_won`. `train_round_win_model.py`
 aplica validacion anti-leakage, split temporal, preprocesado numerico/categorico
 y regresion logistica sin balanceo artificial de probabilidades. Separa por
-partidas completas y orden temporal en train, calibracion y test; compara la
-probabilidad sin calibrar con calibracion sigmoide y excluye columnas
+partidas completas y orden temporal en entrenamiento, calibracion, seleccion
+de politica y test final; compara la probabilidad sin calibrar con calibracion
+sigmoide y excluye columnas
 constantes o dominadas por defaults. Publica opcionalmente
 `artifacts/round_win_loadout.joblib` con `feature_version`, features y metricas.
 La version `round-win-loadout-v3` separa valor de arma, armadura y utilidad,
@@ -75,7 +76,8 @@ Los dos endpoints de lectura de partida usan el mismo contrato:
 - `/matches/{match_id}/economy-ml` (consumido por la UI principal).
 - `/economy-ml/matches/{match_id}` (ruta directa del modulo).
 
-Ambos devuelven `engine: player_first_v10`, `rounds`, `limitations`, compras
+Ambos devuelven `engine: player_first_v12_decision_grade`, `rounds`,
+`limitations`, compras
 observadas/inferidas/recomendadas y proyecciones por jugador. `predict.py`,
 `policy.py` y los modelos macro entrenados orientan la familia de compra del
 motor player-first. Su ajuste esta acotado por confianza y nunca evita la
@@ -156,11 +158,22 @@ El propensity model usa regresion logistica sin `class_weight=balanced` y
 probabilidades out-of-fold con ventanas temporales expansivas agrupadas por
 `match_id`. Los pesos son stabilized IPW con clipping y reporte de soporte,
 overlap, percentiles, tasa de clipping y effective sample size. Es una
-correccion observacional; no se implementa ni se declara AIPW.
+correccion observacional. La politica se compara con las reglas mediante AIPW
+doubly robust y bootstrap agrupado por partida.
 
-Para cada label se comparan regresion logistica e HistGradientBoosting y las
-opciones de calibracion en el conjunto de calibracion. El criterio es log loss,
-Brier, ECE y despues ROC-AUC. El test queda reservado para la evaluacion final.
+Para cada label se comparan regresion logistica e HistGradientBoosting. Los
+calibradores se ajustan en calibracion y se eligen en el bloque posterior de
+seleccion. El modelo elegido se reajusta con entrenamiento y calibracion, se
+recalibra solo con seleccion y se evalua una unica vez en test. El criterio es
+log loss, Brier, ECE y despues ROC-AUC.
+
+La prediccion publicada y la politica no tienen por que compartir estimador.
+La primera prioriza calibracion; la segunda compara tambien un
+HistGradientBoosting dedicado, capaz de aprender interacciones entre estado y
+compra. Varias politicas conservadoras predefinidas compiten por el limite
+inferior de su intervalo doubly robust. El test final permanece fuera de esta
+seleccion. Los casos y acciones elegidos se guardan en `policy_config` y se
+aplican tambien en inferencia; fuera de ese alcance el ML se abstiene.
 Los modelos por rango se consideran por calidad y no solo por especificidad;
 un artefacto con test manifiestamente insuficiente se omite.
 
@@ -171,13 +184,18 @@ plant/defuse actual, score post-round ni loadout enemigo post-buy.
 
 La economia separa tres valores:
 
-- `prebuy_credits_observed`: suma `remaining + spent` cuando la fuente lo trae.
+- `prebuy_credits_observed`: solo existe si una fuente aporta realmente el
+  saldo precompra; nunca se fabrica con `remaining + spent`.
 - `prebuy_credits_rules`: reconstruccion por reglas desde la ronda anterior:
   saldo tras compra, win/loss reward, loss streak, kill reward, spike plant
   reward, save penalty, resets de pistol/cambio de mitad/overtime y cap 9000.
 - `prebuy_credits_selected`: valor usado por el modelo. En resets obligatorios
   usa reglas. Si observed falta, usa reglas. Si observed y rules chocan mucho,
   usa reglas y marca `credit_estimate_quality = inconsistent`.
+
+El `spent` historico calculado como `loadoutValue - remaining` se conserva
+unicamente como `legacy_invalid`; esta prohibido como observacion, feature o
+verdad de negocio.
 
 Los alias `team_estimated_credits_before_buy` y
 `enemy_estimated_credits_before_buy` apuntan al valor selected por
@@ -284,7 +302,26 @@ Comprobar status del modelo:
 $env:PYTHONPATH='backend'; venv\Scripts\python.exe -c "from modules.economy_ml.model_registry import status; print(status())"
 ```
 
+Auditar el solver sobre partidas recientes de MongoDB:
+
+```powershell
+venv\Scripts\python.exe scripts\auditar_recomendador_economia.py --limit 20
+```
+
+El informe comprueba compras ilegales, excesos de presupuesto, uso del
+`spent` legacy, seguridad de pistolas, cobertura de utilidad y latencia p95.
+La activacion del candidato v12 es deliberadamente separada del entrenamiento:
+
+```powershell
+venv\Scripts\python.exe scripts\activar_modelo_economia_v12.py --prediction-only
+venv\Scripts\python.exe scripts\activar_modelo_economia_v12.py --activate --prediction-only
+```
+
+El segundo comando solo activa si el primero supera calibracion y calidad
+predictiva. La politica ML completa exige ademas un intervalo doubly robust
+completamente positivo; si no lo logra, el solver conserva las reglas.
+
 Los artefactos incluyen `schema_version`, `feature_version`, grupos de estado,
 accion y labels, numero de partidas, modelo seleccionado, calibracion y
-metricas. Con `SCHEMA_VERSION = 11`, artefactos v10 o anteriores se rechazan
+metricas. Con `SCHEMA_VERSION = 12`, artefactos v11 o anteriores se rechazan
 hasta reentrenar porque cambio la semantica de las features de accion.

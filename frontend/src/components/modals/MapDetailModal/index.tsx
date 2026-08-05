@@ -12,6 +12,7 @@ import {
   Cell,
 } from "recharts";
 import type { AnalyticsMatch } from "../../../types/dashboard";
+import LoadingModal from "../../ui/LoadingModal";
 import { formatNumber, formatPercent } from "../../../utils/formatters";
 import {
   RECHARTS_TOOLTIP_CLAMP_VIEWBOX,
@@ -280,7 +281,7 @@ export default function MapDetailModal({
                         </LineChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="empty-chart">Cargando grafico...</div>
+                      <LoadingModal placement="section" />
                     )
                   ) : (
                     <div className="empty-chart">Sin suficientes partidas.</div>
@@ -409,7 +410,7 @@ export default function MapDetailModal({
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="empty-chart">Cargando grafico...</div>
+                      <LoadingModal placement="section" />
                     )
                   ) : (
                     <div className="empty-chart">
@@ -493,7 +494,7 @@ export default function MapDetailModal({
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="empty-chart">Cargando grafico...</div>
+                      <LoadingModal placement="section" />
                     )
                   ) : (
                     <div className="empty-chart">

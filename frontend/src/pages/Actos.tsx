@@ -20,7 +20,9 @@ import {
   ContentLoading,
   ContentShell,
 } from "./contentPageUtils";
+import LoadingModal from "../components/ui/LoadingModal";
 import { hideBrokenImage, normalizeText } from "./contentFormatters";
+import { canSearchPlayer, PLAYER_SEARCH_DEBOUNCE_MS } from "../utils/playerSearch";
 import "./ContentPages.css";
 
 function getActLabel(act: ActContent) {
@@ -28,8 +30,16 @@ function getActLabel(act: ActContent) {
 }
 
 function getActNumber(act: ActContent) {
-  const match = getActLabel(act).match(/(\d+)/);
-  return match ? Number(match[1]) : 0;
+  const label = getActLabel(act);
+  const matches = label.match(/\d+/g);
+  if (matches?.length) return Number(matches[matches.length - 1]);
+  const roman = label.toUpperCase().match(/\b(VI|IV|III|II|V|I)\b\s*$/)?.[1];
+  return ({ I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6 } as Record<string, number>)[roman ?? ""] ?? 0;
+}
+
+function getEpisodeBaseLabel(episode: ActContent) {
+  const raw = getActLabel(episode);
+  return raw.match(/V\d+/i)?.[0].toUpperCase() ?? raw;
 }
 
 function isEpisode(act: ActContent) {
@@ -38,10 +48,6 @@ function isEpisode(act: ActContent) {
 
 function isAct(act: ActContent) {
   return normalizeText(act.type ?? "") === "act";
-}
-
-function matchesActSearch(act: ActContent, needle: string) {
-  return normalizeText(`${getActLabel(act)} ${act.parentName ?? ""} ${act.type ?? ""}`).includes(needle);
 }
 
 function getRankIcon(rankIconByTier: Map<number, string>, tier?: number | string | null) {
@@ -128,7 +134,7 @@ function LeaderboardPanel({
   onGoToPlayerPage: (player: LeaderboardPlayer) => void;
 }) {
   const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
-  const visiblePlayers = isLeaderboardSearchActive
+  const visiblePlayers = isLeaderboardSearchActive && !isLeaderboardSearching
     ? data.players.filter((player) => matchesLeaderboardPlayer(player, leaderboardSearch, leaderboardTag))
     : data.players;
 
@@ -150,7 +156,7 @@ function LeaderboardPanel({
       <div className="actos-leaderboard-header">
         <div>
           <h2 className="content-detail-title">
-            {data.act_name}
+            Clasificación
             <span>{region.toUpperCase()} - {platform.toUpperCase()}</span>
           </h2>
           <div className="content-badge-row">
@@ -377,6 +383,7 @@ export default function Actos() {
   const { data: leaderboardRegions } = useLeaderboardRegions();
   const competitiveTiersQuery = useCompetitiveTiers();
   const [search, setSearch] = useState("");
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string>("");
   const [selectedActId, setSelectedActId] = useState<string | null>(null);
   const [selectedRegion, setSelectedRegion] = useState("eu");
@@ -388,7 +395,6 @@ export default function Actos() {
   const [highlightedPlayerKey, setHighlightedPlayerKey] = useState<string | null>(null);
   const [displayLeaderboardData, setDisplayLeaderboardData] = useState<LeaderboardContent | null>(null);
   const [pageInput, setPageInput] = useState("1");
-  const skipNextSearchResetRef = useRef(false);
   const hasAutoSelectedActiveActRef = useRef(false);
 
   const acts = useMemo(
@@ -398,6 +404,25 @@ export default function Actos() {
 
   const episodeDocs = useMemo(() => acts.filter(isEpisode), [acts]);
   const realActs = useMemo(() => acts.filter(isAct), [acts]);
+  const episodeLabelById = useMemo(() => {
+    const result = new Map<string, string>();
+    const groups = new Map<string, ActContent[]>();
+    episodeDocs.forEach((episode) => {
+      const base = getEpisodeBaseLabel(episode);
+      groups.set(base, [...(groups.get(base) ?? []), episode]);
+    });
+    groups.forEach((episodes, base) => {
+      const ordered = [...episodes].sort((a, b) => {
+        const aNumbers = realActs.filter((act) => act.parentId === a.id).map(getActNumber).filter(Boolean);
+        const bNumbers = realActs.filter((act) => act.parentId === b.id).map(getActNumber).filter(Boolean);
+        return Math.min(...aNumbers, Number.MAX_SAFE_INTEGER) - Math.min(...bNumbers, Number.MAX_SAFE_INTEGER);
+      });
+      ordered.forEach((episode, index) => {
+        if (episode.id) result.set(episode.id, ordered.length > 1 ? `${base} - ${index + 1}` : base);
+      });
+    });
+    return result;
+  }, [episodeDocs, realActs]);
   const activeAct = realActs.find((act) => act.isActive) ?? null;
   const activeEpisodeId = activeAct?.parentId ?? "";
   useEffect(() => {
@@ -430,18 +455,28 @@ export default function Actos() {
   }, [selectedActId, selectedRegion]);
 
   useEffect(() => {
+    const trimmedGameName = leaderboardSearch.trim();
+    const trimmedTagLine = leaderboardTag.trim();
+
+    if (!trimmedGameName && !trimmedTagLine) {
+      setDebouncedLeaderboardSearch("");
+      setDebouncedLeaderboardTag("");
+      return;
+    }
+
+    if (!canSearchPlayer(trimmedGameName, trimmedTagLine)) {
+      setDebouncedLeaderboardSearch("");
+      setDebouncedLeaderboardTag("");
+      return;
+    }
+
     const timeoutId = window.setTimeout(() => {
-      const nextSearch = leaderboardSearch.trim();
-      const nextTag = leaderboardTag.trim();
-      const preserveCurrentPage = skipNextSearchResetRef.current && !nextSearch && !nextTag;
-      setDebouncedLeaderboardSearch(nextSearch);
-      setDebouncedLeaderboardTag(nextTag);
-      skipNextSearchResetRef.current = false;
-      if (preserveCurrentPage) return;
+      setDebouncedLeaderboardSearch(trimmedGameName);
+      setDebouncedLeaderboardTag(trimmedTagLine);
       setLeaderboardPage(1);
       setPageInput("1");
       setHighlightedPlayerKey(null);
-    }, 450);
+    }, PLAYER_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
   }, [leaderboardSearch, leaderboardTag]);
@@ -460,8 +495,27 @@ export default function Actos() {
   const selectedEpisodeActs = selectedEpisode
     ? realActs
         .filter((act) => act.parentId === selectedEpisode.id)
-        .filter((act) => matchesActSearch(act, searchNeedle) || matchesActSearch(selectedEpisode, searchNeedle))
         .sort((a, b) => getActNumber(a) - getActNumber(b) || getActLabel(a).localeCompare(getActLabel(b)))
+    : [];
+  const getEpisodeDisplayLabel = (episode: ActContent | null) =>
+    episode?.id ? episodeLabelById.get(episode.id) ?? getEpisodeBaseLabel(episode) : "Episodio";
+  const getActDisplayLabel = (act: ActContent, siblings = selectedEpisodeActs) => {
+    void siblings;
+    return getActLabel(act).toUpperCase();
+  };
+  const searchResults = searchNeedle
+    ? [
+        ...episodeDocs
+          .filter((episode) => normalizeText(`${getActLabel(episode)} ${getEpisodeDisplayLabel(episode)} episodio`).includes(searchNeedle))
+          .map((episode) => ({ type: "episode" as const, item: episode, label: getEpisodeDisplayLabel(episode), meta: "Episodio" })),
+        ...realActs
+          .map((act) => {
+            const siblings = realActs.filter((item) => item.parentId === act.parentId).sort((a, b) => getActNumber(a) - getActNumber(b));
+            const episode = episodeDocs.find((item) => item.id === act.parentId) ?? null;
+            return { type: "act" as const, item: act, label: getActDisplayLabel(act, siblings), meta: getEpisodeDisplayLabel(episode) };
+          })
+          .filter((result) => normalizeText(`${getActLabel(result.item)} ${result.label} ${result.meta} acto`).includes(searchNeedle)),
+      ].slice(0, 10)
     : [];
 
   const regionOptions = useMemo(() => {
@@ -476,9 +530,7 @@ export default function Actos() {
   const selectedAct = selectedActId
     ? realActs.find((act) => act.id === selectedActId) ?? null
     : null;
-  const distributionActIds = selectedEpisode && !selectedAct
-    ? selectedEpisodeActs.map((act) => act.id).filter((id): id is string => Boolean(id))
-    : selectedAct?.id ? [selectedAct.id] : [];
+  const distributionActIds = selectedAct?.id ? [selectedAct.id] : [];
   const rankDistributionQuery = useRankDistribution(distributionActIds);
   const leaderboardQuery = useLeaderboard(
     selectedAct?.id,
@@ -489,14 +541,12 @@ export default function Actos() {
     debouncedLeaderboardSearch,
     debouncedLeaderboardTag,
   );
-  const resultCount = selectedEpisodeActs.length;
+  const resultCount = searchNeedle ? searchResults.length : selectedEpisodeActs.length;
   const hasLeaderboardSearchDraft = Boolean(leaderboardSearch.trim() || leaderboardTag.trim());
   const isLeaderboardSearchActive = Boolean(debouncedLeaderboardSearch || debouncedLeaderboardTag);
-  const isLeaderboardSearchDebouncing =
-    leaderboardSearch.trim() !== debouncedLeaderboardSearch
-    || leaderboardTag.trim() !== debouncedLeaderboardTag;
   const isLeaderboardSearching =
-    hasLeaderboardSearchDraft && (isLeaderboardSearchDebouncing || leaderboardQuery.isFetching);
+    hasLeaderboardSearchDraft && leaderboardQuery.isFetching;
+  const visibleLeaderboardData = leaderboardQuery.data ?? displayLeaderboardData;
 
   useEffect(() => {
     if (!leaderboardQuery.data) return;
@@ -520,6 +570,7 @@ export default function Actos() {
   };
 
   const submitLeaderboardSearch = () => {
+    if (!canSearchPlayer(leaderboardSearch, leaderboardTag)) return;
     setDebouncedLeaderboardSearch(leaderboardSearch.trim());
     setDebouncedLeaderboardTag(leaderboardTag.trim());
     setLeaderboardPage(1);
@@ -543,26 +594,23 @@ export default function Actos() {
 
   const leaderboardContent = selectedAct && (
     <>
-      {leaderboardQuery.isLoading && !displayLeaderboardData && (
-        <div className="content-state-card actos-leaderboard-loading">
-          <h2>Cargando leaderboard</h2>
-          <p>Consultando {effectiveSelectedRegion.toUpperCase()} - PC.</p>
-        </div>
+      {(leaderboardQuery.isFetching || rankDistributionQuery.isLoading) && !visibleLeaderboardData && (
+        <LoadingModal placement="section" />
       )}
-      {leaderboardQuery.isError && (
+      {!visibleLeaderboardData && !leaderboardQuery.isFetching && !rankDistributionQuery.isLoading && leaderboardQuery.isError && (
         <ContentError
           title="Sin leaderboard"
           message="No hay leaderboard disponible para este acto."
           onRetry={() => leaderboardQuery.refetch()}
         />
       )}
-      {displayLeaderboardData && (
+      {visibleLeaderboardData && (
         <LeaderboardPanel
-          data={displayLeaderboardData}
+          data={visibleLeaderboardData}
           region={effectiveSelectedRegion}
           platform="pc"
           rankIconByTier={rankIconByTier}
-          rankDistribution={rankDistributionQuery.data ?? displayLeaderboardData.rank_distribution ?? []}
+          rankDistribution={rankDistributionQuery.data ?? visibleLeaderboardData.rank_distribution ?? []}
           leaderboardSearch={leaderboardSearch}
           setLeaderboardSearch={setLeaderboardSearch}
           leaderboardTag={leaderboardTag}
@@ -577,7 +625,7 @@ export default function Actos() {
           onPageSubmit={() => {
             const nextPage = Number(pageInput);
             if (Number.isFinite(nextPage)) {
-              setLeaderboardPage(Math.max(1, Math.min(displayLeaderboardData.total_pages, nextPage)));
+              setLeaderboardPage(Math.max(1, Math.min(visibleLeaderboardData.total_pages, nextPage)));
             }
           }}
           onPageChange={(page) => {
@@ -590,7 +638,6 @@ export default function Actos() {
             const page = player.leaderboardPage;
             if (!page) return;
             setHighlightedPlayerKey(getLeaderboardPlayerKey(player));
-            skipNextSearchResetRef.current = true;
             setLeaderboardSearch("");
             setLeaderboardTag("");
             setDebouncedLeaderboardSearch("");
@@ -622,13 +669,43 @@ export default function Actos() {
       {!actosQuery.isError && acts.length > 0 && (
         <>
           <div className="content-toolbar content-toolbar--catalog actos-toolbar">
-            <ClearableSearchInput
-              inputClassName="content-search--catalog"
-              placeholder="Buscar acto o episodio..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              onClear={() => setSearch("")}
-            />
+            <div className="actos-catalog-search">
+              <ClearableSearchInput
+                inputClassName="content-search--catalog"
+                placeholder="Buscar acto o episodio..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onClear={() => setSearch("")}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => window.setTimeout(() => setIsSearchFocused(false), 120)}
+              />
+              {isSearchFocused && searchNeedle && (
+                <div className="cskins-search-menu actos-search-menu" role="listbox">
+                  {searchResults.length > 0 ? searchResults.map((result) => (
+                    <button
+                      key={`${result.type}-${result.item.id ?? result.label}`}
+                      type="button"
+                      className="cskins-search-option"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        if (result.type === "episode") {
+                          setSelectedEpisodeId(result.item.id ?? "");
+                          setSelectedActId(null);
+                        } else {
+                          setSelectedEpisodeId(result.item.parentId ?? "");
+                          setSelectedActId(result.item.id ?? null);
+                        }
+                        setSearch(result.label);
+                        setIsSearchFocused(false);
+                      }}
+                    >
+                      <span className="actos-search-symbol" aria-hidden="true">{result.type === "episode" ? "V" : "A"}</span>
+                      <span className="cskins-search-option-copy"><strong>{result.label}</strong><small>{result.meta}</small></span>
+                    </button>
+                  )) : <div className="actos-search-empty">Sin coincidencias</div>}
+                </div>
+              )}
+            </div>
             <span className="content-result-count">{resultCount}</span>
             <button
               className="actos-current-button"
@@ -651,7 +728,7 @@ export default function Actos() {
               >
                 {episodeDocs.map((episode) => (
                   <option key={episode.id ?? getActLabel(episode)} value={episode.id ?? ""}>
-                    {getActLabel(episode)}
+                    {getEpisodeDisplayLabel(episode)}
                   </option>
                 ))}
               </select>
@@ -667,7 +744,7 @@ export default function Actos() {
                   <option value="">Elegir acto</option>
                   {selectedEpisodeActs.map((act) => (
                     <option key={act.id ?? getActLabel(act)} value={act.id ?? ""}>
-                      {getActLabel(act)}
+                      {getActDisplayLabel(act)}
                     </option>
                   ))}
                 </select>
@@ -694,47 +771,27 @@ export default function Actos() {
           </div>
 
           {selectedEpisode ? (
-            <div className="actos-episode-list">
-              <section className="actos-episode is-open">
-                <button
-                  className="actos-episode-toggle"
-                  type="button"
-                  onClick={() => undefined}
-                  aria-expanded
-                >
-                  <span>{getActLabel(selectedEpisode)}</span>
-                  <strong>{selectedEpisodeActs.length}</strong>
-                </button>
-                {!selectedAct && (rankDistributionQuery.data?.length ?? 0) > 0 && (
-                  <div className="actos-episode-distribution">
-                    <RankDistributionChart
-                      distribution={rankDistributionQuery.data ?? []}
-                      rankIconByTier={rankIconByTier}
-                    />
-                  </div>
-                )}
-                <div className="content-grid actos-act-grid">
+            <section className="actos-hierarchy">
+              <header className="actos-hierarchy-header">
+                <span>Episodio competitivo</span>
+                <h2>{getEpisodeDisplayLabel(selectedEpisode)}</h2>
+              </header>
+              {selectedAct ? (
+                <section className="actos-selected-act">
+                  <header><span>Acto seleccionado</span><h3>{getActDisplayLabel(selectedAct)}</h3></header>
+                  <div className="actos-leaderboard-slot">{leaderboardContent}</div>
+                </section>
+              ) : (
+                <div className="actos-act-choices">
                   {selectedEpisodeActs.map((act) => (
-                    <div key={act.id ?? getActLabel(act)} className="actos-act-slot">
-                      <button
-                        className={`content-card actos-act-card ${selectedActId === act.id ? "active" : ""}`}
-                        type="button"
-                        onClick={() => openAct(act)}
-                      >
-                        {act.isActive && <span className="content-badge actos-current-badge">Acto actual</span>}
-                        <h2 className="content-card-title">{getActLabel(act)}</h2>
-                        <p className="content-card-meta">{getActLabel(selectedEpisode)}</p>
-                      </button>
-                      {selectedActId === act.id && (
-                        <div className="actos-leaderboard-slot">
-                          {leaderboardContent}
-                        </div>
-                      )}
-                    </div>
+                    <button key={act.id ?? getActLabel(act)} type="button" onClick={() => openAct(act)}>
+                      <span>{getActDisplayLabel(act)}</span>
+                      {act.isActive && <small>Actual</small>}
+                    </button>
                   ))}
                 </div>
-              </section>
-            </div>
+              )}
+            </section>
           ) : (
             <ContentEmpty message="No hay actos con ese filtro." />
           )}

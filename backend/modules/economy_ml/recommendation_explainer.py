@@ -2,7 +2,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from .display_normalizer import normalize_purchase_for_display, normalize_warning_list
+from .display_normalizer import (
+    compact_purchase_for_api,
+    normalize_purchase_for_display,
+    normalize_warning_list,
+)
+
+
+PLAN_LABELS = {
+    "PISTOL_UTILITY": "pistola con utilidad",
+    "PISTOL_SIDEARM": "pistola mejorada",
+    "PISTOL_ARMOR": "pistola con escudo",
+    "PISTOL_DEFAULT": "pistola estándar",
+    "POST_PISTOL_CONVERSION": "conversión tras pistola",
+    "ANTI_ECO": "antieco",
+    "ECO": "ahorro",
+    "HALF_BUY": "compra parcial",
+    "FORCE_BUY": "compra forzada",
+    "FULL_BUY": "compra completa",
+    "BONUS_UPGRADE": "mejora de la ronda de bonificación",
+    "BONUS_KEEP_INVENTORY": "ronda de bonificación conservando equipamiento",
+    "UNDERINVESTED_BUY": "compra insuficiente",
+    "BROKEN_BUY": "compra descoordinada",
+    "LAST_HALF_ROUND_BUY": "compra de última ronda de mitad",
+    "ELIMINATION_BUY": "compra para evitar eliminación",
+    "CLOSING_BUY": "compra para cerrar la partida",
+    "OVERTIME_BUY": "compra de prórroga",
+}
 
 
 class RecommendationExplainer:
@@ -22,6 +48,7 @@ class RecommendationExplainer:
                 payload["warnings"] = normalize_warning_list(raw)
                 public_inferred[puuid].append(payload)
         for purchase in plan.get("players") or []:
+            purchase = compact_purchase_for_api(purchase)
             puuid = purchase["puuid"]
             hypotheses = public_inferred.get(puuid) or []
             best = hypotheses[0] if hypotheses else {"weapon_source": "unknown", "confidence": .2, "reasons": ["no_inference"]}
@@ -63,6 +90,10 @@ class RecommendationExplainer:
         confidence = round(max(.1, min(1.0, combined * ml_factor * availability_factor)), 4)
         alternatives = plan.get("alternatives") or []
         for alternative in alternatives:
+            alternative["players"] = [
+                compact_purchase_for_api(purchase)
+                for purchase in alternative.get("players") or []
+            ]
             for purchase in alternative.get("players") or []:
                 purchase["display"] = normalize_purchase_for_display(
                     purchase, is_pistol_round=bool((context or {}).get("is_pistol_round")),
@@ -94,27 +125,27 @@ class RecommendationExplainer:
     def _reason(purchase: dict, plan: dict) -> str:
         kind = str(plan.get("plan_kind") or "")
         if purchase.get("bought_by"):
-            return "Recibe un drop de arma; conserva sus creditos para escudo, utilidad y economia futura."
+            return "Recibe un arma de un compañero; conserva sus créditos para escudo, utilidad y economía futura."
         if purchase.get("buys_for"):
-            return "Compra arma para un companero manteniendo carga propia suficiente."
+            return "Compra un arma para un compañero manteniendo recursos suficientes."
         if purchase.get("keep_weapon"):
             weapon = str((purchase.get("weapon") or {}).get("displayName") or "el arma")
             if kind.startswith("BONUS"):
-                return f"Conserva {weapon} para jugar el bonus y ahorrar para la siguiente compra completa."
-            return f"Conserva {weapon} y compra solo la proteccion o utilidad necesaria."
+                return f"Conserva {weapon} para jugar la ronda de bonificación y ahorrar para la siguiente compra completa."
+            return f"Conserva {weapon} y compra solo la protección o utilidad necesaria."
         if kind in {"POST_PISTOL_CONVERSION", "ANTI_ECO"}:
-            return "Convierte la ventaja post-pistol con arma, escudo y utilidad controlada, sin sobreinvertir."
+            return "Convierte la ventaja tras la ronda de pistolas con arma, escudo y utilidad controlada, sin sobreinvertir."
         if kind in {"ECO", "HALF_BUY"}:
             return "Limita el gasto para sincronizar una compra completa en la siguiente ronda."
         if kind in {"UNDERINVESTED_BUY", "BROKEN_BUY"}:
             return "La compra queda por debajo de la potencia disponible y debe revisarse."
         if kind == "FULL_BUY":
-            return "Completa una compra coordinada con arma, proteccion y utilidad clave."
+            return "Completa una compra coordinada con arma, protección y utilidad clave."
         if kind in {"LAST_HALF_ROUND_BUY", "ELIMINATION_BUY", "OVERTIME_BUY"}:
             return "Prioriza potencia inmediata porque no aporta valor reservar creditos."
         if kind == "CLOSING_BUY":
             return "Prioriza cerrar la partida sin ignorar por completo una ronda posterior."
-        return f"Compra coherente con el plan {kind.lower().replace('_', ' ') or 'de equipo'}."
+        return f"Compra coherente con el plan {PLAN_LABELS.get(kind, 'de equipo')}."
 
     @staticmethod
     def _context_reasons(purchase: dict, plan: dict, context: dict) -> list[str]:
@@ -123,28 +154,28 @@ class RecommendationExplainer:
         reasons: list[str] = []
         enemy = (advanced.get("enemy_economy") or {}).get("enemy_buy_recommendation")
         if enemy == "ENEMY_PISTOL":
-            reasons.append("Ronda pistol: se prioriza una compra inicial eficiente.")
+            reasons.append("Ronda de pistolas: se prioriza una compra inicial eficiente.")
         elif enemy == "ENEMY_ECO":
-            reasons.append("La economia enemiga probable es eco; se evita sobreinvertir.")
+            reasons.append("La economía enemiga probable es de ahorro; se evita sobreinvertir.")
         elif enemy == "ENEMY_FULL_BUY":
             reasons.append("La compra enemiga probable es completa; se prioriza potencia coordinada.")
         if purchase.get("keep_weapon") and str(plan.get("plan_kind") or "").startswith("BONUS"):
-            reasons.append("Se conserva el arma para mantener el valor del bonus.")
+            reasons.append("Se conserva el arma para mantener el valor de la ronda de bonificación.")
         puuid = str(purchase.get("puuid") or "")
         ultimate = ((advanced.get("ultimates") or {}).get(puuid) or {})
         if ultimate.get("ultimate_ready") and str(ultimate.get("agent") or "").lower() in {"jett", "chamber"}:
-            reasons.append("La ultimate lista reduce la necesidad de comprar un arma cara.")
+            reasons.append("La habilidad definitiva lista reduce la necesidad de comprar un arma cara.")
         durability = ((advanced.get("armor_durability") or {}).get(puuid) or {})
         maximum = float(durability.get("armor_max_value") or 0)
         remaining = durability.get("armor_value_remaining")
         if maximum and remaining is not None and float(remaining) / maximum < .5:
-            reasons.append("La armadura conservada esta danada y conviene refrescarla si el presupuesto lo permite.")
+            reasons.append("La armadura conservada está dañada y conviene renovarla si el presupuesto lo permite.")
         site_context = advanced.get("site_tendencies") or {}
         if (site_context.get("available") and int(site_context.get("rounds_observed") or 0) >= 3
                 and float(site_context.get("confidence") or 0) >= .5
                 and float(projection.get("site_adjustment") or 0) > .01):
             site = site_context.get("likely_attack_site")
-            reasons.append(f"La utilidad encaja con la tendencia observada del site {site or 'probable'}.")
+            reasons.append(f"La utilidad encaja con la tendencia observada de la zona {site or 'probable'}.")
         if projection.get("player_fit_adjustment", 0) > 0:
             reasons.append("El arma tiene buen ajuste con el historial previo del jugador.")
         return reasons

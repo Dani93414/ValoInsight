@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from "react";
 import { ChevronDown, X } from "lucide-react";
 import { ComparisonTable } from "../../../components/comparison/ComparisonTable";
+import LoadingModal from "../../../components/ui/LoadingModal";
 import { formatNumber, formatPercent } from "../../../utils/formatters";
 import type { EnrichedWeapon, WeaponComparisonMetric, WeaponPersonalComparison } from "../types";
 import { buildWeaponProfileSummary, formatWeaponCost, formatWeaponValue, STAT_LABELS } from "../weaponUtils";
@@ -80,13 +81,7 @@ function GlobalStatsPanel({ weapon }: { weapon: EnrichedWeapon }) {
 
 function ComparisonPanel({ comparison }: { comparison: WeaponPersonalComparison }) {
   if (comparison.isLoading) {
-    return (
-      <div className="weapon-personal-skeleton" role="status">
-        <span />
-        <span />
-        <span />
-      </div>
-    );
+    return <LoadingModal placement="section" />;
   }
 
   if (comparison.isError || !comparison.hasPersonalUsage) {

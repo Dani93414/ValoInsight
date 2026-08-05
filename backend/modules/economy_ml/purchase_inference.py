@@ -89,8 +89,22 @@ class PurchaseInferenceEngine:
     def infer_team(self, states: list[PlayerInventoryState], observed: dict[str, dict],
                    context: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
         context = context or {}
+        state_by_puuid = {state.puuid: state for state in states}
+
+        def reconstructed_outlay(puuid: str) -> float | None:
+            economy = observed.get(puuid) or {}
+            remaining = economy.get("remaining")
+            state = state_by_puuid.get(puuid)
+            if remaining is None or state is None:
+                return None
+            return max(0.0, float(state.credits_before_buy) - float(remaining or 0))
+
         result = {
-            state.puuid: self.infer(state, observed_spent=(observed.get(state.puuid) or {}).get("spent"), context=context)
+            state.puuid: self.infer(
+                state,
+                observed_spent=reconstructed_outlay(state.puuid),
+                context=context,
+            )
             for state in states
         }
         round_number = int(context.get("round_number") or 0)
@@ -105,10 +119,13 @@ class PurchaseInferenceEngine:
             weapon_cost = _cost(receiver.weapon_after_buy) or 0.0
             donors = sorted(
                 (state for state in states if state.puuid != receiver.puuid),
-                key=lambda state: float((observed.get(state.puuid) or {}).get("spent") or 0),
+                key=lambda state: reconstructed_outlay(state.puuid) or 0.0,
                 reverse=True,
             )
-            donor = next((state for state in donors if float((observed.get(state.puuid) or {}).get("spent") or 0) >= weapon_cost), None)
+            donor = next(
+                (state for state in donors if (reconstructed_outlay(state.puuid) or 0.0) >= weapon_cost),
+                None,
+            )
             if not donor:
                 top = result[receiver.puuid][0]
                 top["weapon_source"] = "unknown_or_pickup"

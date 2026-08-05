@@ -1,4 +1,5 @@
 import unittest
+from itertools import product
 from unittest.mock import patch
 
 from modules.economy_ml.economy_income_rules import fixed_round_start_credits, save_penalty_applies
@@ -100,7 +101,7 @@ class EconomyEngineV10Tests(unittest.TestCase):
         donor = PlayerInventoryState("rich", 9000, weapon_before_buy="Vandal", weapon_after_buy="Vandal",
                                      survived_previous_round=True)
         result = PurchaseInferenceEngine().infer_team(
-            [receiver, donor], {"poor": {"spent": 0}, "rich": {"spent": 3000}}
+            [receiver, donor], {"poor": {"remaining": 400}, "rich": {"remaining": 6000}}
         )
         self.assertEqual(result["poor"][0]["weapon_source"], "bought_by_teammate")
         self.assertTrue(result["rich"][0]["buys_for_teammate"])
@@ -275,6 +276,97 @@ class EconomyEngineV10Tests(unittest.TestCase):
         self.assertIn("excessive_saving_penalty", score["warnings"])
         self.assertEqual(TeamBuySolver._summarize(players, inventories, context), "BROKEN_BUY")
 
+    def test_coordinated_bulldog_force_is_not_mislabeled_as_broken(self):
+        inventories = [inv(str(i), 3600) for i in range(5)]
+        players = [{
+            **TeamBuySolver._zero_plan(inventory),
+            "weapon": {"displayName": "Bulldog"}, "weapon_value": 2050,
+            "armor": GEAR["light"], "armor_value": 400,
+            "self_cost": 2450, "expected_remaining": 1150,
+        } for inventory in inventories]
+        self.assertEqual(
+            TeamBuySolver._summarize(players, inventories, {"round_number": 6}),
+            "FORCE_BUY",
+        )
+
+    def test_guardian_team_is_a_full_buy(self):
+        inventories = [inv(str(i), 4300) for i in range(5)]
+        players = [{
+            **TeamBuySolver._zero_plan(inventory),
+            "weapon": {"displayName": "Guardian"}, "weapon_value": 2250,
+            "armor": GEAR["heavy"], "armor_value": 1000,
+            "armor_effective_value": 1000,
+            "self_cost": 3250, "expected_remaining": 1050,
+        } for inventory in inventories]
+        self.assertEqual(
+            TeamBuySolver._summarize(players, inventories, {"round_number": 6}),
+            "FULL_BUY",
+        )
+
+    def test_split_buy_with_funded_unarmed_player_is_dominated(self):
+        inventories = [inv(str(i), 4000) for i in range(5)]
+        players = []
+        for index, inventory in enumerate(inventories):
+            player = TeamBuySolver._zero_plan(inventory)
+            if index < 4:
+                player.update({
+                    "weapon": {"displayName": "Bulldog"}, "weapon_value": 2050,
+                    "armor": GEAR["light"], "armor_value": 400,
+                    "self_cost": 2450, "expected_remaining": 1550,
+                })
+            players.append(player)
+        context = {
+            "round_number": 6,
+            "team_player_credit_estimates": {str(i): 4000 for i in range(5)},
+        }
+        score = BuyScorer().score(players, context)
+        self.assertIn("split_team_buy_with_funded_unarmed_players", score["warnings"])
+        candidate = {"economy_projection": score}
+        self.assertTrue(TeamBuySolver._is_dominated_underinvestment(candidate, context))
+
+    def test_bonus_does_not_preserve_classic_when_replacement_is_affordable(self):
+        players = [{
+            **TeamBuySolver._zero_plan(inv(str(i), 5000)),
+            "weapon": {"displayName": "Classic"}, "weapon_value": 0,
+            "weapon_source": "carried", "keep_weapon": True,
+            "expected_remaining": 5000,
+        } for i in range(5)]
+        context = {
+            "round_number": 3, "is_bonus_candidate": True,
+            "team_player_credit_estimates": {str(i): 5000 for i in range(5)},
+        }
+        score = BuyScorer().score(players, context)
+        self.assertIn("bonus_missing_replacement_weapon", score["warnings"])
+        self.assertTrue(TeamBuySolver._is_dominated_underinvestment(
+            {"economy_projection": score}, context,
+        ))
+
+    def test_fragmented_expensive_low_value_plan_is_dominated(self):
+        inventories = [inv(str(i), 3000) for i in range(5)]
+        players = []
+        for index, inventory in enumerate(inventories):
+            player = TeamBuySolver._zero_plan(inventory)
+            player.update({
+                "weapon": {"displayName": "Shorty"}, "weapon_value": 300,
+                "armor": GEAR["heavy"], "armor_value": 1000,
+                "self_cost": 1500, "expected_remaining": 1500,
+            })
+            if index == 4:
+                player.update({
+                    "weapon": {"displayName": "Bulldog"}, "weapon_value": 2050,
+                    "self_cost": 2700, "expected_remaining": 300,
+                })
+            players.append(player)
+        context = {
+            "round_number": 9,
+            "team_player_credit_estimates": {str(i): 3000 for i in range(5)},
+        }
+        score = BuyScorer().score(players, context)
+        self.assertIn("fragmented_low_value_team_buy", score["warnings"])
+        self.assertTrue(TeamBuySolver._is_dominated_underinvestment(
+            {"economy_projection": score}, context,
+        ))
+
     def test_rich_player_low_weapon_loses_to_rifle_and_ultimate_reduces_penalty(self):
         def player(puuid, weapon, value):
             return {"puuid": puuid, "weapon": {"displayName": weapon}, "weapon_value": value,
@@ -317,9 +409,58 @@ class EconomyEngineV10Tests(unittest.TestCase):
                             and (item.get("armor") or {}).get("displayName") == "Heavy Shield"
                             for item in choices))
 
+    def test_pistol_reduction_preserves_classic_ghost_and_armor_baselines(self):
+        pistol_catalog = {
+            **WEAPONS,
+            "ghost": {"displayName": "Ghost", "cost": 500},
+            "shorty": {"displayName": "Shorty", "cost": 300},
+            "frenzy": {"displayName": "Frenzy", "cost": 450},
+            "sheriff": {"displayName": "Sheriff", "cost": 800},
+        }
+        with patch("modules.economy_ml.legal_purchase.load_weapon_catalog", lambda: pistol_catalog):
+            plans = LegalPurchaseGenerator().generate(
+                inv("p", 800), agent="Skye", limit=200,
+                context={"is_pistol_round": True},
+            )
+        with patch("modules.economy_ml.team_buy_solver.MAX_CHOICES_PER_PLAYER", 4):
+            choices = TeamBuySolver._reduced_choices(plans, {"is_pistol_round": True})
+        names = {(item.get("weapon") or {}).get("displayName") for item in choices}
+        self.assertTrue(None in names or "Classic" in names)
+        self.assertIn("Ghost", names)
+        self.assertTrue(any((item.get("armor_value") or 0) >= 400 for item in choices))
+        self.assertTrue({"Shorty", "Frenzy", "Sheriff"}.issubset(names))
+
+    def test_pistol_sidearm_has_no_intrinsic_weapon_penalty(self):
+        base = {
+            "puuid": "p", "armor": None, "armor_value": 0,
+            "abilities": [], "ability_cost": 0, "expected_remaining": 500,
+            "self_cost": 300, "keep_weapon": False,
+        }
+        shorty = {**base, "weapon": {"displayName": "Shorty"}, "weapon_value": 300}
+        classic = {**base, "weapon": {"displayName": "Classic"}, "weapon_value": 0}
+        scorer = BuyScorer()
+        shorty_score = scorer.score([shorty], {"is_pistol_round": True})
+        scorer.score([classic], {"is_pistol_round": True})
+        self.assertNotIn("pistol_shorty_without_close_range_support", shorty_score["warnings"])
+
+    def test_reduced_choices_does_not_replace_self_buy_anchor_with_unfunded_operator(self):
+        plans = LegalPurchaseGenerator().generate(inv("p", 3500), limit=200)
+        with patch("modules.economy_ml.team_buy_solver.MAX_CHOICES_PER_PLAYER", 4):
+            choices = TeamBuySolver._reduced_choices(plans)
+        protected = [p for p in choices if (p.get("weapon_value") or 0) >= 1600
+                     and (p.get("armor_value") or 0) >= 400]
+        self.assertTrue(protected)
+        self.assertTrue(any(not p.get("requires_weapon_drop") for p in protected))
+
+    def test_purchase_payload_does_not_repeat_raw_content_documents(self):
+        plans = LegalPurchaseGenerator().generate(inv("p", 6000), limit=200)
+        self.assertTrue(plans)
+        self.assertTrue(all("raw" not in (plan.get("weapon") or {}) for plan in plans))
+        self.assertTrue(all("raw" not in (plan.get("armor") or {}) for plan in plans))
+
     def test_contextual_scoring_uses_bounded_shortlist(self):
         inventories = [inv(str(i), 6000) for i in range(5)]
-        def passthrough(score, players, context, model):
+        def passthrough(score, players, context, model, prediction=None):
             return {**score, "warnings": score.get("warnings", []),
                     "debug_warnings": score.get("debug_warnings", [])}
         with patch("modules.economy_ml.team_buy_solver.apply_contextual_adjustments",
@@ -328,7 +469,40 @@ class EconomyEngineV10Tests(unittest.TestCase):
         self.assertGreater(contextual.call_count, 0)
         self.assertLessEqual(contextual.call_count, 16)
 
-    def test_early_heavy_without_justification_is_penalized_more_than_late_fit(self):
+    def test_direct_combination_lookup_matches_cartesian_product_order(self):
+        choices = [
+            [{"id": "a0"}, {"id": "a1"}],
+            [{"id": "b0"}, {"id": "b1"}, {"id": "b2"}],
+            [{"id": "c0"}, {"id": "c1"}],
+        ]
+        expected = list(product(*choices))
+        actual = [
+            TeamBuySolver._combination_at_index(choices, index)
+            for index in range(len(expected))
+        ]
+        self.assertEqual(actual, expected)
+
+    def test_round_win_model_is_reused_between_solver_calls(self):
+        inventories = [inv(str(i), 6000) for i in range(5)]
+
+        def passthrough(score, players, context, model, prediction=None):
+            return {**score, "warnings": score.get("warnings", []),
+                    "debug_warnings": score.get("debug_warnings", [])}
+
+        with (
+            patch("modules.economy_ml.team_buy_solver.RoundWinLoadoutModel") as model_type,
+            patch("modules.economy_ml.team_buy_solver.apply_contextual_adjustments",
+                  side_effect=passthrough),
+        ):
+            model_type.return_value.predict_round_wins.side_effect = (
+                lambda rows: [{"available": False, "warnings": []} for _ in rows]
+            )
+            solver = TeamBuySolver()
+            solver.solve(inventories, context={"advanced_context": {"map_context": {}}})
+            solver.solve(inventories, context={"advanced_context": {"map_context": {}}})
+        model_type.assert_called_once_with()
+
+    def test_early_heavy_weapon_has_no_intrinsic_penalty(self):
         operator = {"puuid": "p", "weapon": {"displayName": "Operator"}, "weapon_value": 4700,
                     "armor": GEAR["heavy"], "armor_value": 1000, "ability_cost": 0,
                     "self_cost": 5700, "expected_remaining": 1000, "keep_weapon": False}
@@ -341,8 +515,8 @@ class EconomyEngineV10Tests(unittest.TestCase):
             "player_profiles": {"p": {"available": True, "confidence": .8, "sniper_tendency": .8}},
             "enemy_economy": {"enemy_buy_recommendation": "ENEMY_FULL_BUY"},
         }})
-        self.assertIn("early_heavy_weapon_context_penalty", early["warnings"])
-        self.assertLess(late["rule_penalty"], early["rule_penalty"])
+        self.assertNotIn("early_heavy_weapon_context_penalty", early["warnings"])
+        self.assertEqual(late["rule_penalty"], early["rule_penalty"])
 
     def test_one_drop_per_donor_and_no_cheap_drop(self):
         donor = {"puuid": "rich", "weapon": WEAPONS["vandal"], "weapon_value": 2900,
@@ -365,7 +539,7 @@ class EconomyEngineV10Tests(unittest.TestCase):
         result = TeamBuySolver.validate(players, [inv("poor", 400)])
         self.assertFalse(result["valid"])
 
-    def test_operator_stack_receives_strong_penalty(self):
+    def test_operator_stack_has_no_weapon_name_penalty(self):
         operator = {"displayName": "Operator", "cost": 4700}
         rifle = {"displayName": "Vandal", "cost": 2900}
         base = {"armor": GEAR["heavy"], "abilities": [], "ability_cost": 0,
@@ -373,7 +547,9 @@ class EconomyEngineV10Tests(unittest.TestCase):
         stacked = [{**base, "puuid": str(i), "weapon": operator} for i in range(3)]
         balanced = [{**base, "puuid": str(i), "weapon": operator if i == 0 else rifle} for i in range(3)]
         scorer = BuyScorer()
-        self.assertGreater(scorer.score(stacked, {})["rule_penalty"], scorer.score(balanced, {})["rule_penalty"])
+        stacked_score = scorer.score(stacked, {})
+        self.assertNotIn("multiple_operators_without_exception", stacked_score["warnings"])
+        self.assertNotIn("too_many_snipers", stacked_score["warnings"])
 
     def test_post_pistol_odin_without_armor_loses_to_protected_spectre(self):
         odin = {"puuid": "p", "weapon": {"displayName": "Odin", "cost": 3200}, "weapon_value": 3200,
@@ -385,7 +561,7 @@ class EconomyEngineV10Tests(unittest.TestCase):
         scorer = BuyScorer()
         self.assertGreater(scorer.score([spectre], context)["team_plan_value"],
                            scorer.score([odin], context)["team_plan_value"])
-        self.assertIn("heavy_weapon_early_penalty", scorer.score([odin], context)["debug_warnings"])
+        self.assertNotIn("heavy_weapon_early_penalty", scorer.score([odin], context)["debug_warnings"])
 
     def test_team_plan_score_is_capped_but_internal_value_is_preserved(self):
         loaded = [{"puuid": str(i), "weapon": {"displayName": "Vandal", "cost": 2900},
@@ -461,6 +637,21 @@ class EconomyEngineV10Tests(unittest.TestCase):
         self.assertEqual(display["loadout_label"], "Classic gratis + Sin escudo")
         self.assertEqual(display["source_label"], "Arma inicial gratis")
 
+    def test_free_signature_ability_is_not_labeled_as_a_purchase(self):
+        display = normalize_purchase_for_display({
+            "weapon": None, "armor": None, "self_cost": 0,
+            "abilities": [{
+                "name": "Paint Shells", "charges": 1, "cost": 0,
+                "source": "free_round_start",
+            }],
+        }, is_pistol_round=True)
+        self.assertEqual(display["ability_label"], "Sin compra de habilidades")
+        self.assertEqual(display["included_ability_label"], "Paint Shells x1")
+
+    def test_player_reason_uses_spanish_label_for_force_buy(self):
+        explanation = RecommendationExplainer._reason({}, {"plan_kind": "FORCE_BUY"})
+        self.assertEqual(explanation, "Compra coherente con el plan compra forzada.")
+
     def test_match_response_exposes_normalized_observed_display_and_dynamic_model_status(self):
         result = recommend_match_economy(economy_match())
         self.assertEqual(len(result["limitations"]), 1)
@@ -509,6 +700,58 @@ class EconomyEngineV10Tests(unittest.TestCase):
         self.assertTrue(all(p["weapon_cost"] == 0 and p["weapon_value"] == 1600 for p in kept))
         self.assertTrue(all(p["self_cost"] == p["armor_cost"] + p["ability_cost"] for p in kept))
 
+    def test_post_pistol_conversion_does_not_leave_rich_players_unarmed(self):
+        inventories = [inv(str(i), 3550) for i in range(5)]
+        context = {
+            "round_number": 2, "is_second_round": True, "is_post_pistol_conversion": True,
+            "previous_round_won": True,
+            "team_player_credit_estimates": {str(i): 3550 for i in range(5)},
+            "advanced_context": {"enemy_economy": {"enemy_buy_recommendation": "ENEMY_ECO"}},
+        }
+        plan = TeamBuySolver().solve(inventories, context=context)
+        useful = sum((p.get("weapon_value") or 0) >= 1600 for p in plan["players"])
+        unarmed = [p for p in plan["players"] if (p.get("weapon_value") or 0) < 500]
+        self.assertGreaterEqual(useful, 3)
+        self.assertFalse(unarmed)
+        self.assertNotIn("post_pistol_conversion_underinvestment", plan["warnings"])
+
+    def test_post_pistol_sidearms_do_not_count_as_conversion_weapons(self):
+        inventories = [inv(str(i), 3550, "Ghost", True) for i in range(5)]
+        context = {
+            "round_number": 2, "is_second_round": True, "is_post_pistol_conversion": True,
+            "previous_round_won": True,
+            "team_player_credit_estimates": {str(i): 3550 for i in range(5)},
+            "advanced_context": {"enemy_economy": {"enemy_buy_recommendation": "ENEMY_ECO"}},
+        }
+        plan = TeamBuySolver().solve(inventories, context=context)
+        useful = sum((p.get("weapon_value") or 0) >= 1600 for p in plan["players"])
+        self.assertGreaterEqual(useful, 3)
+
+    def test_bonus_replaces_dead_players_weapons_without_upgrading_survivors(self):
+        inventories = [inv("alive1", 5000, "Spectre", True), inv("alive2", 5000, "Spectre", True)]
+        inventories += [inv(f"dead{i}", 4500) for i in range(3)]
+        credits = {item.puuid: item.credits_before_buy for item in inventories}
+        plan = TeamBuySolver().solve(inventories, context={
+            "round_number": 3, "is_bonus_candidate": True,
+            "team_player_credit_estimates": credits,
+            "advanced_context": {"enemy_economy": {"enemy_buy_recommendation": "ENEMY_FULL_BUY"}},
+        })
+        by_id = {p["puuid"]: p for p in plan["players"]}
+        self.assertTrue(by_id["alive1"]["keep_weapon"] and by_id["alive2"]["keep_weapon"])
+        self.assertTrue(all((by_id[f"dead{i}"].get("weapon_value") or 0) >= 1600 for i in range(3)))
+        self.assertNotIn("bonus_missing_replacement_weapon", plan["warnings"])
+
+    def test_rich_team_vs_full_buy_rejects_low_weapon_when_supported(self):
+        inventories = [inv(str(i), 4500) for i in range(5)]
+        context = {
+            "round_number": 3,
+            "team_player_credit_estimates": {str(i): 4500 for i in range(5)},
+            "advanced_context": {"enemy_economy": {"enemy_buy_recommendation": "ENEMY_FULL_BUY"}},
+        }
+        plan = TeamBuySolver().solve(inventories, context=context)
+        self.assertNotIn("rich_player_low_weapon_full_buy_penalty", plan["warnings"])
+        self.assertTrue(all((p.get("weapon_value") or 0) >= 1600 for p in plan["players"]))
+
     def test_pistol_plan_never_exceeds_800_per_player(self):
         inventories = [inv(str(i), 800) for i in range(5)]
         plan = TeamBuySolver().solve(inventories, context={"is_pistol_round": True})
@@ -520,7 +763,7 @@ class EconomyEngineV10Tests(unittest.TestCase):
         self.assertEqual(fixed_round_start_credits(25), 5000)
 
     def test_no_observed_post_buy_labels_in_model_features(self):
-        self.assertEqual(SCHEMA_VERSION, 11)
+        self.assertEqual(SCHEMA_VERSION, 12)
         leaked = {"target_loadout_case", "cashflow_case", "enemy_target_loadout_case", "enemy_cashflow_case"}
         self.assertTrue(leaked.issubset(FORBIDDEN_FEATURES))
         self.assertTrue(leaked.isdisjoint(MODEL_FEATURES))
@@ -533,7 +776,8 @@ class EconomyEngineV10Tests(unittest.TestCase):
             inferred={"p": [{"weapon_source": "default", "confidence": .8}]},
             plan={"players": [purchase], "plan_kind": "PISTOL", "team_plan_score": .5, "alternatives": [], "economy_projection": {}},
             player_meta={"p": {"credits_before_buy": 800}})
-        self.assertIs(result["players"][0]["recommended_purchase"], purchase)
+        self.assertEqual(result["players"][0]["recommended_purchase"]["puuid"], purchase["puuid"])
+        self.assertNotIn("raw", result["players"][0]["recommended_purchase"].get("armor") or {})
         self.assertEqual(result["recommended_team_buy"], "PISTOL")
 
 

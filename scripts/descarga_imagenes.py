@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import requests
 from dotenv import load_dotenv
 from pymongo import MongoClient
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 
 TIMEOUT = 10
@@ -46,6 +47,7 @@ stats = {
     "skipped_existing": 0,
     "skipped_non_image": 0,
     "errors": 0,
+    "derivatives": 0,
 }
 
 jobs = []
@@ -53,12 +55,60 @@ queued_targets = set()
 ONLY_CHANGED_IDS_BY_COLLECTION = {}
 CHANGED_SKINS_BY_WEAPON = {}
 OVERWRITE_RUNTIME = OVERWRITE
+GENERATE_DERIVATIVES_RUNTIME = True
 STATS_LOCK = Lock()
+
+DERIVATIVE_SIZES = {"thumb": 384, "medium": 960}
 
 
 def increment_stat(name, amount=1):
     with STATS_LOCK:
         stats[name] += amount
+
+
+def generate_image_derivatives(path: str | Path, *, overwrite: bool = False) -> int:
+    """Create responsive WebP assets while preserving the original image."""
+    source = Path(path)
+    supported = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+    if source.suffix.lower() not in supported:
+        return 0
+    created = 0
+    try:
+        with Image.open(source) as opened:
+            if getattr(opened, "is_animated", False):
+                return 0
+            base = ImageOps.exif_transpose(opened)
+            for label, max_dimension in DERIVATIVE_SIZES.items():
+                target = source.with_name(f"{source.stem}.{label}.webp")
+                if target.exists() and not overwrite:
+                    continue
+                image = base.copy()
+                image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+                if image.mode not in {"RGB", "RGBA"}:
+                    image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+                image.save(target, "WEBP", quality=82, method=4)
+                created += 1
+    except (UnidentifiedImageError, OSError, ValueError):
+        return 0
+    return created
+
+
+def generate_existing_derivatives(root: Path, *, workers: int, overwrite: bool) -> None:
+    candidates = [
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and ".thumb." not in path.name
+        and ".medium." not in path.name
+        and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+    ]
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [
+            executor.submit(generate_image_derivatives, path, overwrite=overwrite)
+            for path in candidates
+        ]
+        for future in as_completed(futures):
+            increment_stat("derivatives", future.result())
 
 
 def is_plain_object(value):
@@ -298,6 +348,14 @@ def download_image(url, file_base_path):
         response.close()
 
         increment_stat("downloaded")
+        if GENERATE_DERIVATIVES_RUNTIME:
+            increment_stat(
+                "derivatives",
+                generate_image_derivatives(
+                    output_path,
+                    overwrite=OVERWRITE_RUNTIME,
+                ),
+            )
         print(f"✅ {os.path.relpath(output_path)}")
 
     except requests.RequestException as e:
@@ -350,7 +408,8 @@ def collect_all_content_from_content_collection(db):
 
 
 def main():
-    global ONLY_CHANGED_IDS_BY_COLLECTION, CHANGED_SKINS_BY_WEAPON, OVERWRITE_RUNTIME
+    global ONLY_CHANGED_IDS_BY_COLLECTION, CHANGED_SKINS_BY_WEAPON
+    global OVERWRITE_RUNTIME, GENERATE_DERIVATIVES_RUNTIME
     parser = argparse.ArgumentParser(description="Descarga imágenes referenciadas desde content en MongoDB.")
     parser.add_argument(
         "--only-changed",
@@ -373,12 +432,23 @@ def main():
         default=DEFAULT_DOWNLOAD_WORKERS,
         help=f"Descargas de imágenes simultáneas (default: {DEFAULT_DOWNLOAD_WORKERS}).",
     )
+    parser.add_argument(
+        "--no-derivatives",
+        action="store_true",
+        help="No genera variantes WebP thumb/medium tras cada descarga.",
+    )
+    parser.add_argument(
+        "--derivatives-only",
+        action="store_true",
+        help="Genera variantes para imagenes existentes sin consultar Mongo.",
+    )
     args = parser.parse_args()
 
     if args.workers <= 0:
         parser.error("--workers debe ser mayor que 0")
 
     OVERWRITE_RUNTIME = bool(args.overwrite)
+    GENERATE_DERIVATIVES_RUNTIME = not args.no_derivatives
     if args.only_changed:
         ONLY_CHANGED_IDS_BY_COLLECTION, CHANGED_SKINS_BY_WEAPON = load_changes_filter(Path(args.changes_file))
         OVERWRITE_RUNTIME = True
@@ -386,6 +456,16 @@ def main():
     project_root = Path(__file__).resolve().parent.parent
     public_path = (project_root / "frontend" / "public").resolve()
     output_root = public_path / "content"
+
+    if args.derivatives_only:
+        print(f"Generando variantes WebP en {output_root}...")
+        generate_existing_derivatives(
+            output_root,
+            workers=args.workers,
+            overwrite=OVERWRITE_RUNTIME,
+        )
+        print(f"Variantes generadas: {stats['derivatives']}")
+        return
 
     print("Cargando .env y conectando a MongoDB...")
 
@@ -487,6 +567,7 @@ def main():
         print(f"Ya existentes:           {stats['skipped_existing']}")
         print(f"No eran imagen:          {stats['skipped_non_image']}")
         print(f"Errores:                 {stats['errors']}")
+        print(f"Variantes WebP:          {stats['derivatives']}")
 
     finally:
         client.close()

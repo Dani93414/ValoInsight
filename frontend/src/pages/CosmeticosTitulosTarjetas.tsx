@@ -8,7 +8,12 @@ import {
   ContentLoading,
   ContentShell,
 } from "./contentPageUtils";
-import { hideBrokenImage, normalizeText } from "./contentFormatters";
+import {
+  fallbackToOriginalImage,
+  getImageDerivative,
+  normalizeText,
+} from "./contentFormatters";
+import { useProgressiveList } from "../hooks/useProgressiveList";
 import "./ContentPages.css";
 
 type ViewMode = "card" | "title";
@@ -60,7 +65,12 @@ function CardAsset({
       <span>{label}</span>
       <div className="ctitles-preview-box">
         {src ? (
-          <img src={src} alt={`${label} de ${alt}`} onError={hideBrokenImage} />
+          <img
+            src={getImageDerivative(src, "medium")}
+            alt={`${label} de ${alt}`}
+            decoding="async"
+            onError={(event) => fallbackToOriginalImage(event, src)}
+          />
         ) : (
           <div className="ctitles-card-asset-empty">Sin imagen</div>
         )}
@@ -108,6 +118,14 @@ export default function CosmeticosTitulosTarjetas() {
       normalizeText(`${item.displayName} ${item.themeUuid ?? ""}`).includes(needle),
     );
   }, [cards, search]);
+  const progressiveTitles = useProgressiveList(
+    filteredTitles,
+    `titles:${search}:${filteredTitles.length}`,
+  );
+  const progressiveCards = useProgressiveList(
+    filteredCards,
+    `cards:${search}:${filteredCards.length}`,
+  );
 
   const activeItems = viewMode === "card" ? filteredCards : filteredTitles;
   const selectedCardKey = selectedCard ? selectedCard.uuid ?? selectedCard.displayName : null;
@@ -274,8 +292,9 @@ export default function CosmeticosTitulosTarjetas() {
           ) : activeItems.length === 0 ? (
             <ContentEmpty message="No hay resultados con esa busqueda." />
           ) : viewMode === "title" ? (
-            <div className="content-grid ctitles-grid">
-              {filteredTitles.map((item) => (
+            <>
+              <div className="content-grid ctitles-grid">
+              {progressiveTitles.visibleItems.map((item) => (
                 <article
                   key={item.uuid ?? item.displayName}
                   className="content-card content-card--static ctitles-title-card"
@@ -284,10 +303,19 @@ export default function CosmeticosTitulosTarjetas() {
                   <p className="content-card-meta">{item.titleText || "Titulo"}</p>
                 </article>
               ))}
-            </div>
+              </div>
+              {progressiveTitles.hasMore && (
+                <div ref={progressiveTitles.sentinelRef} className="content-load-more">
+                  <button type="button" onClick={progressiveTitles.showMore}>
+                    Mostrar más ({filteredTitles.length - progressiveTitles.visibleCount})
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
-            <div className="content-grid ctitles-grid" ref={cardGridRef}>
-              {filteredCards.map((item, index) => {
+            <>
+              <div className="content-grid ctitles-grid" ref={cardGridRef}>
+              {progressiveCards.visibleItems.map((item, index) => {
                 const itemKey = item.uuid ?? item.displayName;
                 const active = selectedCardKey === itemKey;
                 const image = getCardPreview(item);
@@ -306,10 +334,13 @@ export default function CosmeticosTitulosTarjetas() {
                         <span className="content-card-image-wrap ctitles-card-image-wrap">
                           <img
                             className="content-card-image ctitles-card-image"
-                            src={image}
+                            src={getImageDerivative(image, "thumb")}
                             alt={item.displayName}
                             loading="lazy"
-                            onError={hideBrokenImage}
+                            decoding="async"
+                            onError={(event) =>
+                              fallbackToOriginalImage(event, image)
+                            }
                           />
                         </span>
                       )}
@@ -324,7 +355,15 @@ export default function CosmeticosTitulosTarjetas() {
                   </div>
                 );
               })}
-            </div>
+              </div>
+              {progressiveCards.hasMore && (
+                <div ref={progressiveCards.sentinelRef} className="content-load-more">
+                  <button type="button" onClick={progressiveCards.showMore}>
+                    Mostrar más ({filteredCards.length - progressiveCards.visibleCount})
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

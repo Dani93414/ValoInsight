@@ -119,7 +119,7 @@ class ContextualEconomyV11Tests(unittest.TestCase):
         self.assertEqual(profile.weapon_kill_rate["Vandal"], 2.0)
         self.assertEqual(profile.weapon_damage_efficiency["Vandal"], 140.0)
 
-    def test_contextual_adjustments_are_moderate_and_enemy_sensitive(self):
+    def test_contextual_adjustments_do_not_penalize_weapon_name(self):
         base = {"team_plan_value": .6, "team_plan_score": .6, "round_win_probability": .5,
                 "weapon_value": 3200, "armor_value": 0, "utility_value": 0,
                 "synchronization": .5, "rule_penalty": 0, "data_confidence": .7,
@@ -128,7 +128,8 @@ class ContextualEconomyV11Tests(unittest.TestCase):
                 "armor_value": 0, "ability_cost": 0, "keep_weapon": False}
         eco = {"advanced_context": {"enemy_economy": {"available": True, "enemy_buy_recommendation": "ENEMY_ECO"}}}
         result = apply_contextual_adjustments(base, [odin], eco)
-        self.assertLess(result["team_plan_value"], base["team_plan_value"])
+        self.assertEqual(result["enemy_adjustment"], 0)
+        self.assertNotIn("context_enemy_low_buy_heavy_overbuy", result["warnings"])
         self.assertGreaterEqual(result["contextual_adjustment"], -.35)
         self.assertLessEqual(result["team_plan_score"], 1)
 
@@ -282,9 +283,11 @@ class ContextualEconomyV11Tests(unittest.TestCase):
         refreshed = next(item for item in plans if not item.get("keep_armor") and item.get("armor_value") == 1000)
         self.assertGreater(refreshed["armor_value"], carried["armor_effective_value"])
 
-    def test_endpoint_exposes_optional_context_without_breaking_v10(self):
+    def test_endpoint_exposes_optional_context_with_v12_compatibility(self):
         result = recommend_match_economy(_match())
-        self.assertEqual(result["engine"], "player_first_v10")
+        self.assertEqual(result["engine"], "player_first_v12_decision_grade")
+        self.assertEqual(result["compatibility_engine"], "player_first_v10")
+        self.assertEqual(result["economy_contract_version"], 12)
         self.assertEqual(result["advanced_engine"], "player_first_v11_contextual_stable")
         self.assertTrue(result["rounds"])
         advanced = result["rounds"][0]["advanced_context"]
@@ -312,7 +315,7 @@ class ContextualEconomyV11Tests(unittest.TestCase):
         self.assertFalse(any("site" in item for item in reasons(2)))
         self.assertFalse(any("site" in item for item in reasons(3, confidence=.4)))
         self.assertFalse(any("site" in item for item in reasons(3, adjustment=.01)))
-        self.assertTrue(any("site B" in item for item in reasons(3)))
+        self.assertTrue(any("zona B" in item for item in reasons(3)))
 
 
 if __name__ == "__main__":

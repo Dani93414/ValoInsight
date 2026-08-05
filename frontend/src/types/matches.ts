@@ -47,6 +47,8 @@ export type RawRoundPlayerEconomy = {
   armor?: string;
   remaining?: number;
   spent?: number;
+  spentSource?: string;
+  observedFields?: string[];
 };
 
 export type RawRoundPlayerAbility = {
@@ -158,6 +160,7 @@ export type EconomyDisplayRecommendation = {
   armor_label: string;
   loadout_label: string;
   ability_label: string;
+  included_ability_label?: string;
   spend_label: string;
   source_label: string;
 };
@@ -306,6 +309,26 @@ export type EconomyMlPlayerRecommendation = {
   warnings: string[];
   debug_warnings?: string[];
   confidence: number;
+  actual_purchase?: Record<string, unknown>;
+  purchase_score?: number;
+  grade?: string;
+  score_range?: [number, number];
+  score_confidence?: number;
+  score_is_single_value?: boolean;
+  ambiguity_reason?: string | null;
+  best_alternative?: Partial<LegalPlayerPurchase> & {
+    total_outlay?: number | null;
+    ability_cost?: number | null;
+  };
+  individual_regret?: number;
+  recommendation_equivalent_to_actual?: boolean;
+  individual_value_gap?: number;
+  coordination_attribution?: Record<string, unknown>;
+  grade_explanation?: {
+    what_went_well?: string;
+    lost_value?: string;
+    best_alternative?: string | null;
+  };
 };
 
 export type EconomyContextSignal = {
@@ -379,12 +402,40 @@ export type EconomyMlRoundRecommendation = {
   advanced_context?: EconomyAdvancedContext;
   warnings: string[];
   debug_warnings: string[];
+  economy_contract_version?: 12;
+  ruleset_version?: string;
+  data_provenance?: Record<string, unknown>;
+  credit_reconstruction?: Record<string, unknown>;
+  actual_plan?: Record<string, unknown>;
+  recommended_plan?: Record<string, unknown>;
+  team_purchase_score?: number;
+  team_grade?: string;
+  score_range?: [number, number];
+  score_confidence?: number;
+  score_is_single_value?: boolean;
+  ambiguity_reason?: string | null;
+  actual_plan_value?: number;
+  recommended_plan_value?: number;
+  value_gap?: number;
+  decision_value_deltas?: {
+    round_win_probability?: number;
+    match_win_probability?: number;
+    next_full_buy_players_if_loss?: number;
+  };
+  actual_outcome?: {
+    team_won_round?: boolean;
+    round_result?: string | null;
+    round_ceremony?: string | null;
+    excluded_from_purchase_grade?: boolean;
+  };
 };
 
 export type EconomyMlResponse = {
   [key: string]: any;
   available: boolean;
-  engine: "player_first_v10";
+  economy_contract_version?: 12;
+  engine: "player_first_v10" | "player_first_v12_decision_grade";
+  compatibility_engine?: "player_first_v10";
   advanced_engine?: "player_first_v11_contextual" | string;
   reason?: string;
   match_id: string;

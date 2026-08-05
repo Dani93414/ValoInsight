@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from .legal_purchase import LegalPurchaseGenerator
 from .inventory import PlayerInventoryState
-from .contextual_scorer import apply_contextual_adjustments
+from .contextual_scorer import apply_contextual_adjustments, build_round_win_features
 from .round_win_model import RoundWinLoadoutModel
 from .buy_classifier import classify_team_buy_action
 from .content_catalog import weapon_role
@@ -108,7 +108,7 @@ def _candidate_action(players: list[dict], context: dict) -> str:
         "weapon": (player.get("weapon") or {}).get("displayName"),
         "armor": (player.get("armor") or {}).get("displayName"),
         "loadoutValue": _weapon_value(player) + _armor_value(player) + _num(player.get("ability_cost")),
-        "spent": _num(player.get("self_cost")),
+        "totalOutlay": _num(player.get("self_cost")),
     } for player in players]
     return classify_team_buy_action(economies, {"won": bool(context.get("previous_round_won"))})
 
@@ -160,7 +160,12 @@ class BuyScorer:
         if {"recon", "info", "reveal"} & utility_types: composition_value += .04
         if {"trap", "anchor", "stall"} & utility_types: composition_value += .03
         if {"entry", "space_creation"} & utility_types: composition_value += .03
-        round_win = min(.94, .16 + weapon_value / 19000 + armor_value / 13000 + utility_value / 7500 + composition_value)
+        # On pistol rounds, shop price is not a combat-power coefficient.
+        # Exact sidearm identity is evaluated by the trained candidate model;
+        # the deterministic score compares armor, utility and future economy
+        # without assuming that a more expensive pistol is automatically best.
+        weapon_power_value = 0.0 if context.get("is_pistol_round") else weapon_value
+        round_win = min(.94, .16 + weapon_power_value / 19000 + armor_value / 13000 + utility_value / 7500 + composition_value)
         ml_support = None
         warnings: list[str] = []
         if ml_estimator:
@@ -183,8 +188,6 @@ class BuyScorer:
                 macro_adjustment = .06 * macro_confidence
             elif _action_family(candidate_action) != "unknown":
                 macro_adjustment = -.06 * macro_confidence
-        operator_count = sum(_is_operator(p) for p in players)
-        sniper_count = sum(_is_sniper(p) for p in players)
         useful_weapons = sum(_is_useful_weapon(p) for p in players)
         strong_armor = sum(_strong_armor(p) for p in players)
         armored = sum(_armor_value(p) >= 400 for p in players)
@@ -202,10 +205,6 @@ class BuyScorer:
         post_pistol = bool(context.get("is_post_pistol_conversion") or context.get("is_second_round") or _num(context.get("round_number")) in {2, 14})
         anti_eco = bool(context.get("is_anti_eco"))
         last_round = bool(context.get("is_last_round_before_switch") or context.get("is_match_point"))
-        if operator_count > 1 and not context.get("allow_multi_operator"):
-            penalty += .22 * (operator_count - 1); penalties.append("multiple_operators_without_exception")
-        if sniper_count > 2:
-            penalty += .10 * (sniper_count - 2); penalties.append("too_many_snipers")
         if full_buy and _num(context.get("team_controller_count")) > 0 and not ({"smoke", "vision_denial"} & utility_types):
             penalty += .16; penalties.append("full_buy_without_controller_smokes")
         if full_buy and useful_weapons < 4:
@@ -214,20 +213,30 @@ class BuyScorer:
             penalty += .07 * (3 - strong_armor); penalties.append("full_buy_weak_armor")
         expensive_unarmored = [p for p in players if _weapon_value(p) >= 2400 and _armor_value(p) <= 0 and not p.get("keep_weapon")]
         rifles_underarmored = [p for p in players if _weapon_value(p) >= 2900 and _armor_value(p) < 400 and not p.get("keep_weapon")]
-        heavy_unarmored = [p for p in players if _weapon_name(p) in {"odin", "operator"} and _armor_value(p) <= 0]
         if expensive_unarmored:
             penalty += .18 * len(expensive_unarmored); penalties.append("weapon_without_armor_penalty")
         if rifles_underarmored:
             penalty += .10 * len(rifles_underarmored); penalties.append("underarmor_penalty")
-        if heavy_unarmored:
-            penalty += .28 * len(heavy_unarmored); penalties.append("operator_without_armor_penalty")
         if post_pistol or anti_eco:
-            early_heavy = [p for p in players if _weapon_name(p) in {"odin", "operator"}]
-            if early_heavy and not context.get("allow_early_heavy_weapon"):
-                penalty += .35 * len(early_heavy); penalties.append("heavy_weapon_early_penalty")
             overbought = [p for p in players if _weapon_value(p) >= 2400 and _num(p.get("expected_remaining")) < 400]
             if overbought:
                 penalty += .16 * len(overbought); penalties.append("post_pistol_overbuy_penalty")
+        if post_pistol and bool(context.get("previous_round_won") or context.get("won_pistol")):
+            # A conversion round must convert the pistol advantage into real
+            # team power. Saving almost everything is not a valid conversion,
+            # even when the following-round reserve looks excellent.
+            conversion_weapons = sum(_weapon_value(p) >= 1600 for p in players)
+            if conversion_weapons < 3:
+                penalty += .20 * (3 - conversion_weapons)
+                penalties.append("post_pistol_conversion_underinvestment")
+            unarmed_conversion = [
+                p for p in players
+                if not p.get("keep_weapon") and _weapon_value(p) < 500
+                and _num((context.get("team_player_credit_estimates") or {}).get(str(p.get("puuid")))) >= 1600
+            ]
+            if unarmed_conversion:
+                penalty += .36 * len(unarmed_conversion)
+                penalties.append("post_pistol_unarmed_player")
         if context.get("is_pistol_round"):
             full_utility = sum(_num(p.get("ability_cost")) > 500 for p in players)
             all_utility = bool(players) and all(_num(p.get("ability_cost")) >= 400 and _weapon_value(p) <= 0 and _armor_value(p) <= 0 for p in players)
@@ -239,11 +248,39 @@ class BuyScorer:
             upgrades = sum(not p.get("keep_weapon") and _weapon_value(p) >= 2400 for p in players)
             if upgrades > 2:
                 penalty += .18 * (upgrades - 2); penalties.append("bonus_upgrade_penalty")
+            # Preserve surviving inventory, but replace weapons for players who
+            # died. A bonus is not permission to send rich, unarmed players
+            # against the opponent's first full buy.
+            credits_by_player = context.get("team_player_credit_estimates") or {}
+            missing_bonus_weapons = [
+                p for p in players
+                if _weapon_value(p) < 1600
+                and _num(credits_by_player.get(str(p.get("puuid")))) >= 2400
+            ]
+            if missing_bonus_weapons:
+                weight = .24 if enemy_buy == "ENEMY_FULL_BUY" else .18
+                penalty += weight * len(missing_bonus_weapons)
+                penalties.append("bonus_missing_replacement_weapon")
         if not pistol and not bonus_candidate and can_full_buy >= 4:
             if useful_weapons < 4:
                 penalty += .20 + .08 * (4 - useful_weapons); penalties.append("team_full_buy_available_but_half_buy_penalty")
             if strong_armor < 3:
                 penalty += .12; penalties.append("high_credit_weak_armor_penalty")
+        credits_by_player = context.get("team_player_credit_estimates") or {}
+        funded_without_weapon = [
+            player for player in players
+            if not player.get("keep_weapon") and _weapon_value(player) < 1600
+            and _num(credits_by_player.get(str(player.get("puuid")))) >= 1600
+        ]
+        if (
+            not pistol and not bonus_candidate and funded_without_weapon
+            and (useful_weapons >= 3 or (useful_weapons >= 2 and spend > 5000))
+        ):
+            penalty += .24 * len(funded_without_weapon)
+            penalties.append("split_team_buy_with_funded_unarmed_players")
+        if not pistol and not bonus_candidate and useful_weapons < 3 and spend > 5000:
+            penalty += .35 + .10 * (3 - useful_weapons)
+            penalties.append("fragmented_low_value_team_buy")
         if not pistol and not bonus_candidate and enemy_buy == "ENEMY_FULL_BUY" and useful_weapons < 4:
             penalty += .16; penalties.append("enemy_full_buy_underinvestment_penalty")
         if not pistol and not bonus_candidate and average_remaining > 5000 and useful_weapons < 4:
@@ -261,21 +298,11 @@ class BuyScorer:
                 ultimate_substitute = bool(ult.get("ultimate_ready") and str(ult.get("agent") or "").lower() in {"jett", "chamber"})
                 reduction = .35 if ultimate_substitute else .60 if _context_justifies_weapon(player, context) else 1.0
                 if credits >= 3900 and value < 1600:
-                    penalty += .16 * reduction; penalties.append("rich_player_low_weapon_full_buy_penalty")
+                    penalty += .36 * reduction; penalties.append("rich_player_low_weapon_full_buy_penalty")
                 if credits >= 5000 and value < 2400 and enemy_buy == "ENEMY_FULL_BUY":
                     penalty += .14 * reduction; penalties.append("rich_player_underpowered_vs_full_buy")
                 if credits >= 7000 and value < 2400 and armor >= 400 and candidate_full_buy:
                     penalty += .10 * reduction; penalties.append("high_credit_player_saved_too_much")
-        heavy = [p for p in players if _weapon_name(p) in {"odin", "operator"}]
-        early_non_decisive = int(_num(context.get("round_number"))) <= 4 and not (decisive_round or closing)
-        if heavy and early_non_decisive:
-            penalty += .20 * len(heavy); penalties.append("early_heavy_weapon_context_penalty")
-        if heavy and enemy_buy in {"ENEMY_ECO", "ENEMY_HALF_BUY", "ENEMY_PISTOL"}:
-            weighted = sum(.5 if _context_justifies_weapon(player, context) and _armor_value(player) >= 400 else 1.0
-                           for player in heavy)
-            penalty += .18 * weighted; penalties.append("heavy_weapon_enemy_low_buy_penalty")
-        if heavy and useful_weapons < 4:
-            penalty += .12 * len(heavy); penalties.append("heavy_weapon_weak_team_composition_penalty")
         if not last_round:
             stranded = sum(0 < value < 400 for value in remaining)
             if stranded:
@@ -330,15 +357,20 @@ class BuyScorer:
 class TeamBuySolver:
     generator: LegalPurchaseGenerator = field(default_factory=LegalPurchaseGenerator)
     scorer: BuyScorer = field(default_factory=BuyScorer)
+    round_win_model: RoundWinLoadoutModel | None = field(default=None, repr=False)
 
     def solve(self, inventories: list[PlayerInventoryState], *, agents: dict[str, str] | None = None,
               context: dict | None = None, alternatives: int = 5,
               ml_estimator: Callable[[dict], float] | None = None) -> dict:
         agents, context = agents or {}, context or {}
-        round_win_model = RoundWinLoadoutModel() if context.get("advanced_context") else None
+        round_win_model = None
+        if context.get("advanced_context"):
+            if self.round_win_model is None:
+                self.round_win_model = RoundWinLoadoutModel()
+            round_win_model = self.round_win_model
         choices = [self._reduced_choices(self.generator.generate(
             inv, agent=agents.get(inv.puuid, ""), context=context, ability_combination_limit=12,
-        )) for inv in inventories]
+        ), context) for inv in inventories]
         candidates: list[dict] = []
         total_combinations = prod(len(items) for items in choices)
         selected_indices = None
@@ -347,11 +379,64 @@ class TeamBuySolver:
                 round(index * (total_combinations - 1) / (MAX_TEAM_COMBINATIONS - 1))
                 for index in range(MAX_TEAM_COMBINATIONS)
             }
-        # Sample deterministically across the complete anchor grid when 4^5/5^5
-        # would otherwise make the synchronous endpoint impractical.
-        for combination_index, combination in enumerate(product(*choices)):
-            if selected_indices is not None and combination_index not in selected_indices:
-                continue
+            # Flat sampling changes the final player's choice fastest and can
+            # miss every coordinated template. Preserve homogeneous anchors
+            # and one-player deviations without evaluating the whole grid.
+            def flattened_index(indices: list[int]) -> int:
+                value = 0
+                for choice_index, options in zip(indices, choices):
+                    value = value * len(options) + choice_index
+                return value
+
+            for anchor in range(min(len(options) for options in choices)):
+                baseline = [anchor] * len(choices)
+                selected_indices.add(flattened_index(baseline))
+                for player_index, options in enumerate(choices):
+                    for variant in range(len(options)):
+                        indices = list(baseline)
+                        indices[player_index] = variant
+                        selected_indices.add(flattened_index(indices))
+            semantic_templates: list[list[int]] = []
+            for minimum_weapon in (1600, 2400):
+                template: list[int] = []
+                for options in choices:
+                    viable = [
+                        (index, plan) for index, plan in enumerate(options)
+                        if not plan.get("requires_weapon_drop")
+                        and _weapon_value(plan) >= minimum_weapon and _armor_value(plan) >= 400
+                        and (int(_num(context.get("round_number"))) > 4
+                             or _weapon_name(plan) not in {"odin", "operator"})
+                    ]
+                    if not viable:
+                        template = []
+                        break
+                    index, _ = max(viable, key=lambda item: (
+                        _num(item[1].get("ability_cost")),
+                        _weapon_value(item[1]) + _armor_value(item[1]),
+                        -_num(item[1].get("self_cost")),
+                    ))
+                    template.append(index)
+                if template:
+                    semantic_templates.append(template)
+            for template in semantic_templates:
+                selected_indices.add(flattened_index(template))
+                for player_index, options in enumerate(choices):
+                    for variant in range(len(options)):
+                        indices = list(template)
+                        indices[player_index] = variant
+                        selected_indices.add(flattened_index(indices))
+        # Materialize only the sampled combinations. Iterating product(*choices)
+        # and discarding almost every tuple still walks the complete Cartesian
+        # grid, which dominates full-match latency as candidate diversity grows.
+        if selected_indices is None:
+            combinations = product(*choices)
+        else:
+            combinations = (
+                self._combination_at_index(choices, combination_index)
+                for combination_index in sorted(selected_indices)
+                if 0 <= combination_index < total_combinations
+            )
+        for combination in combinations:
             players = [dict(item) for item in combination]
             self._resolve_weapon_drops(players, inventories, context)
             validation = self.validate(players, inventories)
@@ -361,14 +446,72 @@ class TeamBuySolver:
             candidates.append({"players": players, "team_plan_score": score["team_plan_score"],
                                "team_plan_value": score["team_plan_value"], "economy_projection": score,
                                "valid": True, "warnings": validation["warnings"] + score["warnings"]})
+        # Some plans are legal in the narrow budget sense but strategically
+        # dominated. Only remove them when the search found a supported legal
+        # alternative, so sparse/low-credit rounds still return a plan.
+        supported = [candidate for candidate in candidates
+                     if not self._is_dominated_underinvestment(candidate, context)]
+        if supported:
+            candidates = supported
         if context.get("advanced_context") and candidates:
             # Enumerate the wider legal search with cheap rule scoring, then run
             # contextual/ML inference only on the strongest bounded shortlist.
             candidates.sort(key=lambda item: item["team_plan_value"], reverse=True)
-            candidates = candidates[:max(CONTEXTUAL_SHORTLIST_SIZE, alternatives + 1)]
-            for candidate in candidates:
+            shortlist_limit = max(CONTEXTUAL_SHORTLIST_SIZE, alternatives + 1)
+            if context.get("is_pistol_round"):
+                # Preserve one strong representative for every pistol family.
+                # Otherwise the price-based cheap scorer can remove a weapon
+                # before the exact-identity ML model ever compares it.
+                retained = candidates[:max(4, shortlist_limit - 7)]
+                for weapon_name in ("classic", "shorty", "frenzy", "ghost", "sheriff"):
+                    representative = max(
+                        candidates,
+                        key=lambda candidate: (
+                            sum(
+                                (_weapon_name(player) or "classic") == weapon_name
+                                for player in candidate.get("players") or []
+                            ),
+                            candidate["team_plan_value"],
+                        ),
+                    )
+                    if representative not in retained:
+                        retained.append(representative)
+                for candidate in candidates:
+                    if len(retained) >= shortlist_limit:
+                        break
+                    if candidate not in retained:
+                        retained.append(candidate)
+                candidates = retained[:shortlist_limit]
+            else:
+                candidates = candidates[:shortlist_limit]
+            feature_rows = [
+                build_round_win_features(candidate["economy_projection"], candidate["players"], context)
+                for candidate in candidates
+            ]
+            predictions = (
+                round_win_model.predict_round_wins(feature_rows)
+                if round_win_model is not None else [None] * len(candidates)
+            )
+            pistol_probabilities = [
+                _num(prediction.get("round_win_probability"))
+                for prediction in predictions
+                if prediction and prediction.get("available")
+                and prediction.get("round_win_probability") is not None
+            ]
+            contextual_context = context
+            if context.get("is_pistol_round") and pistol_probabilities:
+                ordered_probabilities = sorted(pistol_probabilities)
+                midpoint = len(ordered_probabilities) // 2
+                reference = (
+                    ordered_probabilities[midpoint]
+                    if len(ordered_probabilities) % 2 else
+                    (ordered_probabilities[midpoint - 1] + ordered_probabilities[midpoint]) / 2
+                )
+                contextual_context = {**context, "pistol_ml_probability_reference": reference}
+            for candidate, prediction in zip(candidates, predictions):
                 score = apply_contextual_adjustments(
-                    candidate["economy_projection"], candidate["players"], context, round_win_model,
+                    candidate["economy_projection"], candidate["players"], contextual_context,
+                    round_win_model, prediction,
                 )
                 candidate["team_plan_score"] = score["team_plan_score"]
                 candidate["team_plan_value"] = score["team_plan_value"]
@@ -387,21 +530,132 @@ class TeamBuySolver:
         return best
 
     @staticmethod
-    def _reduced_choices(plans: list[dict]) -> list[dict]:
+    def _combination_at_index(choices: list[list[dict]], flat_index: int) -> tuple[dict, ...]:
+        """Return one product() tuple without enumerating all preceding tuples."""
+        indices = [0] * len(choices)
+        remainder = flat_index
+        for position in range(len(choices) - 1, -1, -1):
+            remainder, indices[position] = divmod(remainder, len(choices[position]))
+        return tuple(options[index] for options, index in zip(choices, indices))
+
+    @staticmethod
+    def _is_dominated_underinvestment(candidate: dict, context: dict) -> bool:
+        warnings = set((candidate.get("economy_projection") or {}).get("debug_warnings") or [])
+        if warnings & {
+            "split_team_buy_with_funded_unarmed_players",
+            "fragmented_low_value_team_buy",
+        }:
+            return True
+        if context.get("is_bonus_candidate") and "bonus_missing_replacement_weapon" in warnings:
+            return True
+        post_pistol_win = bool(
+            context.get("is_post_pistol_conversion") or context.get("is_second_round")
+            or int(_num(context.get("round_number"))) in {2, 14}
+        ) and bool(context.get("previous_round_won") or context.get("won_pistol"))
+        if post_pistol_win and warnings & {
+            "post_pistol_conversion_underinvestment", "post_pistol_unarmed_player",
+            "post_pistol_overbuy_penalty",
+        }:
+            return True
+        enemy_buy = (((context.get("advanced_context") or {}).get("enemy_economy") or {})
+                     .get("enemy_buy_recommendation"))
+        full_buy_capable = sum(
+            _num(value) >= 3900 for value in (context.get("team_player_credit_estimates") or {}).values()
+        )
+        if full_buy_capable >= 4 and "team_full_buy_available_but_half_buy_penalty" in warnings:
+            return True
+        if not context.get("is_bonus_candidate") and enemy_buy == "ENEMY_FULL_BUY" and full_buy_capable >= 4:
+            return "rich_player_low_weapon_full_buy_penalty" in warnings
+        return False
+
+    @staticmethod
+    def _reduced_choices(plans: list[dict], context: dict | None = None) -> list[dict]:
         if not plans:
             return []
+        context = context or {}
         ordered = sorted(plans, key=lambda p: _num(p.get("self_cost")))
         picks = [ordered[0]]
-        max_utility = max(plans, key=lambda p: (_num(p.get("ability_cost")), _num(p.get("self_cost"))))
+        pistol = bool(context.get("is_pistol_round"))
+        if pistol:
+            # Preserve the strategically distinct pistol baselines. The old
+            # tie-break preferred the most expensive weapon, which could keep
+            # Shorty + utility while pruning Classic + the same utility.
+            classic_utility = max(
+                (p for p in plans if _weapon_name(p) in {"", "classic"}),
+                key=lambda p: (
+                    _num(p.get("ability_cost")), _armor_value(p),
+                    -_num(p.get("self_cost")),
+                ),
+                default=None,
+            )
+            ghost_buy = max(
+                (p for p in plans if _weapon_name(p) == "ghost"),
+                key=lambda p: (
+                    _num(p.get("ability_cost")), _armor_value(p),
+                    -_num(p.get("self_cost")),
+                ),
+                default=None,
+            )
+            classic_armor = max(
+                (p for p in plans
+                 if _weapon_name(p) in {"", "classic"} and _armor_value(p) >= 400),
+                key=lambda p: (
+                    _num(p.get("ability_cost")), _armor_value(p),
+                    -_num(p.get("self_cost")),
+                ),
+                default=None,
+            )
+            picks.extend(item for item in (classic_utility, ghost_buy, classic_armor) if item)
+            for sidearm_name in ("shorty", "frenzy", "sheriff"):
+                sidearm_plan = max(
+                    (p for p in plans if _weapon_name(p) == sidearm_name),
+                    key=lambda p: (
+                        _num(p.get("ability_cost")), _armor_value(p),
+                        -_num(p.get("self_cost")),
+                    ),
+                    default=None,
+                )
+                if sidearm_plan:
+                    picks.append(sidearm_plan)
+        max_utility = max(plans, key=lambda p: (
+            _num(p.get("ability_cost")),
+            -_weapon_value(p) if pistol else _num(p.get("self_cost")),
+            _armor_value(p),
+            -_num(p.get("self_cost")),
+        ))
         carried_loadout = max((p for p in plans if p.get("keep_weapon") or p.get("keep_armor")),
                               key=lambda p: (_weapon_value(p) + _armor_value(p), -_num(p.get("self_cost"))), default=None)
         if carried_loadout:
             picks.append(carried_loadout)
-        protected_weapon = max((p for p in plans if _weapon_value(p) >= 1600 and _armor_value(p) >= 400),
-                               key=lambda p: (_weapon_value(p) + _armor_value(p), -_num(p.get("self_cost"))), default=None)
+        post_pistol_win = bool(
+            context.get("is_post_pistol_conversion") or context.get("is_second_round")
+            or int(_num(context.get("round_number"))) in {2, 14}
+        ) and bool(context.get("previous_round_won") or context.get("won_pistol"))
+        if post_pistol_win:
+            conversion_buy = max((p for p in plans if not p.get("requires_weapon_drop")
+                                  and 1600 <= _weapon_value(p) <= 2050 and _armor_value(p) >= 400),
+                                 key=lambda p: (_num(p.get("ability_cost")), _armor_value(p),
+                                                -_num(p.get("self_cost"))), default=None)
+            if conversion_buy:
+                picks.append(conversion_buy)
+        early_round = int(_num(context.get("round_number"))) <= 4
+        protected_weapon = max((p for p in plans if not p.get("requires_weapon_drop")
+                                and _weapon_value(p) >= 1600 and _armor_value(p) >= 400
+                                and (not early_round or _weapon_name(p) not in {"odin", "operator"})),
+                               key=lambda p: (_num(p.get("ability_cost")),
+                                              _weapon_value(p) + _armor_value(p),
+                                              -_num(p.get("self_cost"))), default=None)
         if protected_weapon:
             picks.append(protected_weapon)
-        full_buy_candidate = max((p for p in plans if _weapon_value(p) >= 2400 and _armor_value(p) >= 400),
+        rifle_candidate = max((p for p in plans if not p.get("requires_weapon_drop")
+                               and weapon_role(_weapon_name(p)) == "rifle" and _armor_value(p) >= 400),
+                              key=lambda p: (_num(p.get("ability_cost")), _armor_value(p),
+                                             _weapon_value(p), -_num(p.get("self_cost"))), default=None)
+        if rifle_candidate:
+            picks.append(rifle_candidate)
+        full_buy_candidate = max((p for p in plans if not p.get("requires_weapon_drop")
+                                  and _weapon_value(p) >= 2400 and _armor_value(p) >= 400
+                                  and (not early_round or _weapon_name(p) not in {"odin", "operator"})),
                                  key=lambda p: (_weapon_value(p) + _armor_value(p), -_num(p.get("self_cost"))), default=None)
         if full_buy_candidate:
             picks.append(full_buy_candidate)
@@ -418,7 +672,8 @@ class TeamBuySolver:
                 seen.add(key)
                 result.append(item)
         # Default 4^5 combinations; operators may opt into five anchors via env.
-        return result[:MAX_CHOICES_PER_PLAYER]
+        choice_limit = max(MAX_CHOICES_PER_PLAYER, 7) if pistol else MAX_CHOICES_PER_PLAYER
+        return result[:choice_limit]
 
     @staticmethod
     def _resolve_weapon_drops(players: list[dict], inventories: list[PlayerInventoryState],
@@ -530,20 +785,23 @@ class TeamBuySolver:
         post_pistol = bool(context.get("is_post_pistol_conversion") or context.get("is_second_round") or round_number in {2, 14})
         if post_pistol and (context.get("won_pistol") or context.get("previous_round_won") or context.get("team_win_streak", 0)):
             return "ANTI_ECO" if context.get("is_anti_eco") else "POST_PISTOL_CONVERSION"
-        weapons = sum(_weapon_value(p) >= 2400 or p.get("keep_weapon") for p in players)
+        # Guardian is a legitimate full-buy primary at 2,250 credits. Using
+        # 2,400 here mislabeled coordinated Guardian teams as broken buys.
+        premium_weapons = sum(_weapon_value(p) >= 2250 for p in players)
+        useful_weapons = sum(_is_useful_weapon(p) for p in players)
         armored = sum(_armor_value(p) >= 400 for p in players)
-        if weapons >= 4 and armored >= 3:
+        if premium_weapons >= 4 and armored >= 3:
             return "FULL_BUY"
         total_credits = sum(inv.credits_before_buy for inv in inventories)
         remaining = sum(_num(p.get("expected_remaining")) for p in players)
         full_buy_capable = sum(inv.credits_before_buy >= 3900 or bool(inv.weapon_before_buy) for inv in inventories)
-        if full_buy_capable >= 4 and (weapons < 4 or armored < 3):
-            return "UNDERINVESTED_BUY" if weapons >= 3 else "BROKEN_BUY"
+        if full_buy_capable >= 4 and (premium_weapons < 4 or armored < 3):
+            return "UNDERINVESTED_BUY" if useful_weapons >= 3 else "BROKEN_BUY"
         if spend <= 1500:
             return "ECO"
         if spend <= max(4000, total_credits * .45) and remaining >= 7000:
             return "HALF_BUY"
         synchronized = max([_num(p.get("expected_remaining")) for p in players] or [0]) - min([_num(p.get("expected_remaining")) for p in players] or [0])
-        if synchronized > 3000 or (weapons < 3 and spend > 7000):
+        if (synchronized > 3000 and useful_weapons < len(players)) or (useful_weapons < 3 and spend > 7000):
             return "BROKEN_BUY"
         return "FORCE_BUY"

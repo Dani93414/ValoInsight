@@ -64,8 +64,18 @@ export function WeaponCard({
         title={compareDisabledReason ?? "Comparar arma"}
       >
         <GitCompare size={16} aria-hidden="true" />
+        <span className="weapon-compare-tooltip" role="tooltip">
+          {compareActive
+            ? "Quitar de la comparación"
+            : isShield
+              ? "Añadir escudo a la comparación"
+              : "Añadir a la comparación"}
+        </span>
       </button>
       {hasLowSample && <span className="weapon-stat-badge is-low">Baja muestra</span>}
+      {!hasStats && !isShield && (
+        <span className="weapon-unavailable-badge">Sin salir en estos datos</span>
+      )}
 
       <button
         type="button"

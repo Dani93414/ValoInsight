@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { usePlayerDashboard } from "../api/hooks";
 import BackButton from "../components/BackButton";
 import FloatingActionButton from "../components/FloatingActionButton";
+import PageLoadingScreen from "../components/ui/PageLoadingScreen";
 import HeatmapModal, {
   type HeatmapEntryFilters,
 } from "../components/modals/HeatmapModal";
@@ -59,15 +60,7 @@ export default function HeatmapPage() {
   }
 
   if (loading) {
-    return (
-      <div className="loading-screen" role="status" aria-live="polite">
-        <div className="loading-card">
-          <div className="loading-spinner" />
-          <h2>Cargando mapa de calor</h2>
-          <p>Preparando los datos del jugador...</p>
-        </div>
-      </div>
-    );
+    return <PageLoadingScreen />;
   }
 
   if (!dashboard) {

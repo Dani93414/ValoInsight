@@ -29,7 +29,14 @@ export {
   useRankDistribution,
 } from "./useContentQueries";
 
-export { useGlobalAgentStats, useGlobalMapStats, useRegions } from "./useGlobalStatsQueries";
+export {
+  useGlobalAgentStats,
+  useGlobalMapStats,
+  useRegionOptions,
+  useRegionSummaries,
+  useRegionWeaponStats,
+  useRegions,
+} from "./useGlobalStatsQueries";
 
 export {
   usePlayerDashboard,

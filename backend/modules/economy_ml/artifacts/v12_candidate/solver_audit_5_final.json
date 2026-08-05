@@ -1,0 +1,178 @@
+{
+  "matches_requested": 5,
+  "matches_completed": 5,
+  "matches_failed": 0,
+  "failures": [],
+  "performance_seconds": {
+    "median": 2.7046,
+    "p95": 3.8868,
+    "maximum": 3.8868
+  },
+  "acceptance": {
+    "zero_invalid_purchases": true,
+    "zero_budget_overruns": true,
+    "zero_legacy_spent_usage": true,
+    "whole_match_p95_at_most_8_seconds": true
+  },
+  "backtest": {
+    "total_recommendations": 232,
+    "total_player_recommendations": 1160,
+    "recommended_action_counts": {
+      "PISTOL_SIDEARM": 14,
+      "PISTOL_UTILITY": 6,
+      "HALF_BUY": 15,
+      "POST_PISTOL_CONVERSION": 10,
+      "FULL_BUY": 80,
+      "BONUS_UPGRADE": 5,
+      "FORCE_BUY": 36,
+      "UNDERINVESTED_BUY": 15,
+      "LAST_HALF_ROUND_BUY": 14,
+      "BONUS_KEEP_INVENTORY": 4,
+      "BROKEN_BUY": 7,
+      "OVERTIME_BUY": 12,
+      "CLOSING_BUY": 7,
+      "ELIMINATION_BUY": 7
+    },
+    "invalid_recommendations": 0,
+    "invalid_recommendation_rate": 0.0,
+    "recommendations_exceeding_credits": 0,
+    "exceeds_credits_rate": 0.0,
+    "average_expected_team_plan_value": 0.508678,
+    "recommendations_with_abilities": 1096,
+    "ability_recommendation_rate": 0.944828,
+    "missing_utility_for_utility_roles": 0,
+    "sheriff_share_in_eco_or_pistol": 0.0,
+    "graded_rounds": 232,
+    "average_team_purchase_score": 70.4418,
+    "legacy_spent_used_rounds": 0
+  },
+  "pistol_safety": {
+    "pistol_recommendations": 20,
+    "pistol_player_recommendations": 100,
+    "pistol_sheriff_player_recommendations": 6,
+    "pistol_sheriff_light_player_recommendations": 0,
+    "pistol_free_light_exceptions": 0,
+    "pistol_impossible_player_recommendations": 0,
+    "pistol_invalid_recommendation_percentage": 0.0
+  },
+  "distribution": {
+    "total_recommendations": 232,
+    "recommended_action_counts": {
+      "PISTOL_SIDEARM": 14,
+      "PISTOL_UTILITY": 6,
+      "HALF_BUY": 15,
+      "POST_PISTOL_CONVERSION": 10,
+      "FULL_BUY": 80,
+      "BONUS_UPGRADE": 5,
+      "FORCE_BUY": 36,
+      "UNDERINVESTED_BUY": 15,
+      "LAST_HALF_ROUND_BUY": 14,
+      "BONUS_KEEP_INVENTORY": 4,
+      "BROKEN_BUY": 7,
+      "OVERTIME_BUY": 12,
+      "CLOSING_BUY": 7,
+      "ELIMINATION_BUY": 7
+    },
+    "recommended_action_percentages": {
+      "PISTOL_SIDEARM": 0.0603,
+      "PISTOL_UTILITY": 0.0259,
+      "HALF_BUY": 0.0647,
+      "POST_PISTOL_CONVERSION": 0.0431,
+      "FULL_BUY": 0.3448,
+      "BONUS_UPGRADE": 0.0216,
+      "FORCE_BUY": 0.1552,
+      "UNDERINVESTED_BUY": 0.0647,
+      "LAST_HALF_ROUND_BUY": 0.0603,
+      "BONUS_KEEP_INVENTORY": 0.0172,
+      "BROKEN_BUY": 0.0302,
+      "OVERTIME_BUY": 0.0517,
+      "CLOSING_BUY": 0.0302,
+      "ELIMINATION_BUY": 0.0302
+    },
+    "real_buy_action_counts": {
+      "ECO_PISTOL_UPGRADE": 26,
+      "FORCE_RIFLE_LIGHT": 19,
+      "FULL_RIFLES": 119,
+      "FORCE_2_RIFLES": 29,
+      "FULL_OPERATOR": 20,
+      "SEMI_MARSHAL": 4,
+      "MIXED_LOW_BUY": 1,
+      "ECO_ONE_SHERIFF": 2,
+      "ECO_SHERIFF_STACK": 1,
+      "SEMI_SMG": 9,
+      "ECO_TWO_SHERIFFS": 2
+    },
+    "real_vs_recommended_matrix": {
+      "ECO_PISTOL_UPGRADE": {
+        "PISTOL_SIDEARM": 12,
+        "PISTOL_UTILITY": 6,
+        "HALF_BUY": 2,
+        "FORCE_BUY": 6
+      },
+      "FORCE_RIFLE_LIGHT": {
+        "POST_PISTOL_CONVERSION": 4,
+        "BONUS_UPGRADE": 4,
+        "FORCE_BUY": 6,
+        "HALF_BUY": 2,
+        "FULL_BUY": 1,
+        "BROKEN_BUY": 1,
+        "ELIMINATION_BUY": 1
+      },
+      "FULL_RIFLES": {
+        "FULL_BUY": 68,
+        "FORCE_BUY": 11,
+        "UNDERINVESTED_BUY": 10,
+        "LAST_HALF_ROUND_BUY": 8,
+        "BROKEN_BUY": 4,
+        "OVERTIME_BUY": 12,
+        "CLOSING_BUY": 4,
+        "HALF_BUY": 1,
+        "ELIMINATION_BUY": 1
+      },
+      "FORCE_2_RIFLES": {
+        "LAST_HALF_ROUND_BUY": 3,
+        "POST_PISTOL_CONVERSION": 4,
+        "BONUS_KEEP_INVENTORY": 4,
+        "FULL_BUY": 5,
+        "FORCE_BUY": 5,
+        "BROKEN_BUY": 1,
+        "BONUS_UPGRADE": 1,
+        "ELIMINATION_BUY": 2,
+        "CLOSING_BUY": 3,
+        "HALF_BUY": 1
+      },
+      "FULL_OPERATOR": {
+        "LAST_HALF_ROUND_BUY": 3,
+        "FULL_BUY": 6,
+        "UNDERINVESTED_BUY": 5,
+        "FORCE_BUY": 2,
+        "ELIMINATION_BUY": 3,
+        "BROKEN_BUY": 1
+      },
+      "SEMI_MARSHAL": {
+        "FORCE_BUY": 2,
+        "HALF_BUY": 2
+      },
+      "MIXED_LOW_BUY": {
+        "FORCE_BUY": 1
+      },
+      "ECO_ONE_SHERIFF": {
+        "PISTOL_SIDEARM": 2
+      },
+      "ECO_SHERIFF_STACK": {
+        "HALF_BUY": 1
+      },
+      "SEMI_SMG": {
+        "POST_PISTOL_CONVERSION": 2,
+        "HALF_BUY": 4,
+        "FORCE_BUY": 3
+      },
+      "ECO_TWO_SHERIFFS": {
+        "HALF_BUY": 2
+      }
+    },
+    "eco_recommendations": 0,
+    "sheriff_eco_recommendations": 0,
+    "sheriff_share_within_eco_recommendations": 0.0
+  }
+}

@@ -11,6 +11,7 @@ ROUND_WIN_FEATURES = [
     "team_weapon_value", "team_armor_value", "team_utility_value",
     "enemy_projected_weapon_value", "enemy_projected_armor_value", "enemy_projected_utility_value",
     "rifle_count", "operator_count", "smg_count", "sidearm_count", "heavy_weapon_count",
+    "classic_count", "shorty_count", "frenzy_count", "ghost_count", "sheriff_count",
     "heavy_shield_count", "regen_shield_count", "light_shield_count", "ultimate_ready_count",
     "map", "side", "round_number", "score_diff", "loss_streak",
     "team_credits_total", "team_credits_median", "enemy_credits_total", "enemy_credits_median",
@@ -18,6 +19,9 @@ ROUND_WIN_FEATURES = [
 ]
 CATEGORICAL_ROUND_WIN_FEATURES = ["map", "side", "agent_roles", "utility_types_available", "enemy_buy_class"]
 NUMERIC_ROUND_WIN_FEATURES = [name for name in ROUND_WIN_FEATURES if name not in CATEGORICAL_ROUND_WIN_FEATURES]
+RARE_BUT_ACTIONABLE_FEATURES = {
+    "classic_count", "shorty_count", "frenzy_count", "ghost_count", "sheriff_count",
+}
 
 
 def _series(frame: pd.DataFrame, name: str, default: Any = 0) -> pd.Series:
@@ -70,9 +74,15 @@ def validate_round_win_dataset(frame: pd.DataFrame) -> dict[str, Any]:
     report = feature_quality_report(frame)
     return {"valid": not leaked and not missing and valid_labels > 0, "rows": len(frame),
             "valid_labels": valid_labels, "forbidden_features": leaked, "missing_features": missing,
-            "feature_version": "round-win-loadout-v3", "feature_report": report,
-            "excluded_feature_candidates": [name for name, item in report.items()
-                                             if item["nunique"] <= 1 or item["default_rate"] >= .98]}
+            "feature_version": "round-win-loadout-v4", "feature_report": report,
+            "excluded_feature_candidates": [
+                name for name, item in report.items()
+                if item["nunique"] <= 1
+                or (
+                    item["default_rate"] >= .98
+                    and name not in RARE_BUT_ACTIONABLE_FEATURES
+                )
+            ]}
 
 
 def feature_quality_report(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
@@ -120,6 +130,9 @@ def build_round_win_dataset(economy_dataset: pd.DataFrame) -> pd.DataFrame:
     mappings = {
         "rifle_count": "action_rifle_count", "operator_count": "action_operator_count",
         "smg_count": "action_smg_count", "heavy_shield_count": "action_heavy_armor_count",
+        "classic_count": "action_classic_count", "shorty_count": "action_shorty_count",
+        "frenzy_count": "action_frenzy_count", "ghost_count": "action_ghost_count",
+        "sheriff_count": "action_sheriff_count",
         "regen_shield_count": "action_regen_armor_count", "light_shield_count": "action_light_armor_count",
         "round_number": "round_number", "score_diff": "score_diff", "loss_streak": "loss_streak",
         "team_credits_total": "team_estimated_credits_before_buy",
@@ -127,7 +140,11 @@ def build_round_win_dataset(economy_dataset: pd.DataFrame) -> pd.DataFrame:
     }
     for target, origin in mappings.items():
         result[target] = pd.to_numeric(_series(source, origin), errors="coerce").fillna(0)
-    result["sidearm_count"] = pd.to_numeric(_series(source, "action_sheriff_count"), errors="coerce").fillna(0)
+    result["sidearm_count"] = sum(
+        result[name] for name in (
+            "classic_count", "shorty_count", "frenzy_count", "ghost_count", "sheriff_count",
+        )
+    )
     result["heavy_weapon_count"] = 0
     result["ultimate_ready_count"] = pd.to_numeric(_series(source, "team_ultimates_ready"), errors="coerce").fillna(0)
     result["team_credits_median"] = pd.to_numeric(_series(source, "team_credit_median"), errors="coerce").fillna(0)

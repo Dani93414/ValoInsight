@@ -244,6 +244,22 @@ def build_weapon_usage_taxonomy() -> dict[str, list[dict[str, Any]]]:
     return taxonomy
 
 
+@lru_cache(maxsize=1)
+def _weapon_lookup_indexes() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_lower: dict[str, dict[str, Any]] = {}
+    by_compact: dict[str, dict[str, Any]] = {}
+    for uuid, weapon in load_weapon_catalog().items():
+        aliases = [
+            uuid, weapon.get("displayName"), weapon.get("name"), weapon.get("uuid"),
+            (weapon.get("raw") or {}).get("assetPath"),
+        ]
+        for alias in aliases:
+            if alias:
+                by_lower.setdefault(str(alias).strip().lower(), weapon)
+                by_compact.setdefault(_compact(alias), weapon)
+    return by_lower, by_compact
+
+
 def find_weapon(value: Any) -> dict[str, Any] | None:
     if isinstance(value, dict):
         for key in ("uuid", "id", "assetPath", "displayName", "name"):
@@ -257,16 +273,24 @@ def find_weapon(value: Any) -> dict[str, Any] | None:
     catalog = load_weapon_catalog()
     if text in catalog:
         return catalog[text]
-    lower_keys = {str(key).lower(): item for key, item in catalog.items()}
-    if text.lower() in lower_keys:
-        return lower_keys[text.lower()]
-    compact = _compact(text)
-    for weapon in catalog.values():
-        aliases = [weapon.get("displayName"), weapon.get("name"), weapon.get("uuid"),
-                   (weapon.get("raw") or {}).get("assetPath")]
-        if compact in {_compact(alias) for alias in aliases if alias}:
-            return weapon
-    return None
+    by_lower, by_compact = _weapon_lookup_indexes()
+    return by_lower.get(text.lower()) or by_compact.get(_compact(text))
+
+
+@lru_cache(maxsize=1)
+def _gear_lookup_indexes() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_lower: dict[str, dict[str, Any]] = {}
+    by_compact: dict[str, dict[str, Any]] = {}
+    for uuid, gear in load_gear_catalog().items():
+        aliases = [
+            uuid, gear.get("displayName"), gear.get("uuid"),
+            (gear.get("raw") or {}).get("assetPath"),
+        ]
+        for alias in aliases:
+            if alias:
+                by_lower.setdefault(str(alias).strip().lower(), gear)
+                by_compact.setdefault(_compact(alias), gear)
+    return by_lower, by_compact
 
 
 def find_gear(value: Any) -> dict[str, Any] | None:
@@ -282,15 +306,8 @@ def find_gear(value: Any) -> dict[str, Any] | None:
     catalog = load_gear_catalog()
     if text in catalog:
         return catalog[text]
-    lower_keys = {str(key).lower(): item for key, item in catalog.items()}
-    if text.lower() in lower_keys:
-        return lower_keys[text.lower()]
-    compact = _compact(text)
-    for gear in catalog.values():
-        aliases = [gear.get("displayName"), gear.get("uuid"), (gear.get("raw") or {}).get("assetPath")]
-        if compact in {_compact(alias) for alias in aliases if alias}:
-            return gear
-    return None
+    by_lower, by_compact = _gear_lookup_indexes()
+    return by_lower.get(text.lower()) or by_compact.get(_compact(text))
 
 
 def weapon_has_profile(value: Any, profile: str) -> bool:
@@ -366,3 +383,5 @@ def clear_catalog_cache() -> None:
     load_weapon_catalog.cache_clear()
     load_map_catalog.cache_clear()
     load_gear_catalog.cache_clear()
+    _weapon_lookup_indexes.cache_clear()
+    _gear_lookup_indexes.cache_clear()

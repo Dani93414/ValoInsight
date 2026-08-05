@@ -13,6 +13,24 @@ export async function getRegions(): Promise<RegionStats[]> {
   return res.json();
 }
 
+export async function getRegionOptions(): Promise<Array<{ region: string; updatedAt?: string }>> {
+  const res = await fetch(apiUrl("/regions/options"));
+  if (!res.ok) throw new Error("Error opciones de regiones");
+  return res.json();
+}
+
+export async function getRegionSummaries(): Promise<RegionStats[]> {
+  const res = await fetch(apiUrl("/regions/summaries"));
+  if (!res.ok) throw new Error("Error resúmenes regionales");
+  return res.json();
+}
+
+export async function getRegionWeaponStats(): Promise<RegionStats[]> {
+  const res = await fetch(apiUrl("/regions/weapon-stats"));
+  if (!res.ok) throw new Error("Error estadísticas regionales de armas");
+  return res.json();
+}
+
 export async function getGlobalAgentStats(
   filters: GlobalAgentStatsFilters,
 ): Promise<GlobalAgentStatsPayload> {

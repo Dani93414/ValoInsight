@@ -43,7 +43,8 @@ button {
   position: relative;
   isolation: isolate;
   min-height: 100vh;
-  overflow: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
   padding: 18px clamp(16px, 4vw, 60px) 72px;
   background:
     radial-gradient(
@@ -752,10 +753,9 @@ button {
 }
 
 .home-reveal {
-  opacity: 0;
-  transform: translateY(28px) scale(0.985);
-  filter: blur(6px);
-  animation: none !important;
+  opacity: 1;
+  transform: none;
+  filter: none;
   transition:
     opacity 720ms var(--home-premium-ease),
     transform 720ms var(--home-premium-ease),
@@ -763,7 +763,13 @@ button {
   transition-delay: calc(var(--reveal-index, 0) * 70ms);
 }
 
-.home-reveal.home-is-visible {
+.home-page.home-reveal-ready .home-reveal {
+  opacity: 0;
+  transform: translateY(34px) scale(0.985);
+  filter: blur(7px);
+}
+
+.home-page.home-reveal-ready .home-reveal.home-is-visible {
   opacity: 1;
   transform: translateY(0) scale(1);
   filter: blur(0);
@@ -1117,7 +1123,7 @@ button {
 
 .home-global-insight {
   position: relative;
-  opacity: 0;
+  opacity: 1;
   min-height: 132px;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1130,14 +1136,20 @@ button {
     ),
     linear-gradient(90deg, rgba(255, 70, 85, 0.12), transparent 58%);
   padding: 16px;
-  transform: translateY(16px) scale(0.985);
-  filter: blur(5px);
+  transform: none;
+  filter: none;
   transition:
     opacity 640ms var(--home-premium-ease),
     transform 640ms var(--home-premium-ease),
     filter 640ms var(--home-premium-ease),
     border-color 220ms var(--home-premium-ease);
   transition-delay: calc(160ms + var(--reveal-index, 0) * 62ms);
+}
+
+.home-page.home-reveal-ready .home-global-insight {
+  opacity: 0;
+  transform: translateY(16px) scale(0.985);
+  filter: blur(5px);
 }
 
 .home-global-card.home-is-visible .home-global-insight {

@@ -1,4 +1,6 @@
 import HeatmapCanvas from "../HeatmapCanvas";
+import LoadingModal from "../../ui/LoadingModal";
+import PageLoadingScreen from "../../ui/PageLoadingScreen";
 import {
   useHeatmapViewModel,
   toSortedCsv,
@@ -155,6 +157,12 @@ export default function HeatmapModal(props: Props) {
   const selectedMapName =
     availableMaps.find((mapItem) => mapItem.uuid === selectedMapId)
       ?.displayName ?? undefined;
+
+  if (filterOptionsLoading) {
+    return isModalMode
+      ? <LoadingModal placement="overlay" />
+      : <PageLoadingScreen />;
+  }
   const truncationMessages = [
     buildTruncationMessage(
       needsSecondary ? leftCanvasLabel : "Heatmap",
@@ -196,9 +204,6 @@ export default function HeatmapModal(props: Props) {
               No se pudieron cargar opciones dinamicas. Se muestran opciones
               base para que puedas continuar.
             </p>
-          )}
-          {!filterOptionsError && filterOptionsLoading && (
-            <p className="heatmap-options-warning">Cargando opciones...</p>
           )}
           <p className="heatmap-sidebar-subtitle">
             Elige los filtros de arranque del heatmap. Podras cambiarlos despues
@@ -289,6 +294,11 @@ export default function HeatmapModal(props: Props) {
         </>
       ) : (
         <div className="heatmap-layout">
+          {selectedMapId && showBlockingLoader && (
+            <div className="heatmap-loading-overlay">
+              <LoadingModal placement="section" />
+            </div>
+          )}
           <aside className="heatmap-sidebar">
             <div className="heatmap-sidebar-header">
               <h3 className="heatmap-sidebar-title">Mapa de calor</h3>
@@ -559,13 +569,6 @@ export default function HeatmapModal(props: Props) {
             {!selectedMapId && (
               <div className="heatmap-empty">
                 No hay mapa seleccionado. Puedes cambiarlo desde los filtros.
-              </div>
-            )}
-
-            {selectedMapId && showBlockingLoader && (
-              <div className="heatmap-empty">
-                <div className="heatmap-loading-spinner" />
-                Cargando datos espaciales...
               </div>
             )}
 

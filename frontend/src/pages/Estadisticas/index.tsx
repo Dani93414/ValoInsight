@@ -20,14 +20,10 @@ import {
   CartesianGrid,
 } from "recharts";
 import { Info } from "lucide-react";
-import MatchDetailModal from "../../components/modals/MatchDetailModal";
-import AgentDetailModal from "../../components/modals/AgentDetailModal";
-import WeaponDetailModal from "../../components/modals/WeaponDetailModal";
-import MapDetailModal from "../../components/modals/MapDetailModal";
-import HeatmapModal, {
-  type HeatmapEntryFilters,
-} from "../../components/modals/HeatmapModal";
+import type { HeatmapEntryFilters } from "../../components/modals/HeatmapModal";
 import BackButton from "../../components/BackButton";
+import LoadingModal from "../../components/ui/LoadingModal";
+import PageLoadingScreen from "../../components/ui/PageLoadingScreen";
 import {
   useEstadisticasViewModel,
   MATCHES_PER_PAGE,
@@ -66,6 +62,22 @@ import {
   buildSvgPlaceholder,
   getHeaderCardKind,
 } from "../../constants/dashboard";
+
+const MatchDetailModal = React.lazy(
+  () => import("../../components/modals/MatchDetailModal"),
+);
+const AgentDetailModal = React.lazy(
+  () => import("../../components/modals/AgentDetailModal"),
+);
+const WeaponDetailModal = React.lazy(
+  () => import("../../components/modals/WeaponDetailModal"),
+);
+const MapDetailModal = React.lazy(
+  () => import("../../components/modals/MapDetailModal"),
+);
+const HeatmapModal = React.lazy(
+  () => import("../../components/modals/HeatmapModal"),
+);
 
 // --- Resolve helpers (use normalizeLabel from utils) ---
 
@@ -388,6 +400,7 @@ export default function Estadisticas() {
 
   const {
     loading,
+    rankComparisonInitialLoading,
     rankComparisonLoading,
     dashboard,
     player,
@@ -1119,16 +1132,8 @@ export default function Estadisticas() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="loading-screen" role="status" aria-live="polite">
-        <div className="loading-card">
-          <div className="loading-spinner" />
-          <h2>Cargando estadisticas</h2>
-          <p>Preparando el dashboard del jugador...</p>
-        </div>
-      </div>
-    );
+  if (loading || rankComparisonInitialLoading) {
+    return <PageLoadingScreen />;
   }
 
   if (!playerId) {
@@ -1227,13 +1232,7 @@ export default function Estadisticas() {
   return (
     <div className="stats-container">
       {rankComparisonLoading && (
-        <div className="stats-loading-modal" role="status" aria-live="polite">
-          <div className="loading-card stats-loading-modal__card">
-            <div className="loading-spinner" />
-            <h2>Cargando cohorte</h2>
-            <p>Comparando el jugador con rangos equivalentes...</p>
-          </div>
-        </div>
+        <LoadingModal placement="overlay" />
       )}
       <div className="stats-top-actions">
         <BackButton />
@@ -3476,6 +3475,7 @@ export default function Estadisticas() {
         </div>
       )}
 
+      <React.Suspense fallback={<LoadingModal placement="overlay" />}>
       {selectedMatchId && (
         <MatchDetailModal
           key={selectedMatchId}
@@ -3548,6 +3548,7 @@ export default function Estadisticas() {
           }}
         />
       )}
+      </React.Suspense>
       {floatingTooltip && floatingTooltip.visible && (
         <div
           ref={floatingTooltipRef}

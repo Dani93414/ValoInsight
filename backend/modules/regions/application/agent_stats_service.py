@@ -66,6 +66,9 @@ _RANK_NAMES = {
 _OPTIONS_CACHE_TTL_SECONDS = 600.0
 _options_cache: dict[str, tuple[float, dict[str, list[dict[str, Any]]]]] = {}
 _options_cache_lock = Lock()
+_AGENT_STATS_CACHE_TTL_SECONDS = 600.0
+_agent_stats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_agent_stats_cache_lock = Lock()
 _MAP_STATS_CACHE_TTL_SECONDS = 600.0
 _map_options_cache: dict[str, tuple[float, dict[str, list[dict[str, Any]]]]] = {}
 _map_stats_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -642,6 +645,61 @@ def get_global_agent_stats(
     act_norm = _normalize_filter(act_id)
     role_norm = _normalize_filter(role)
     rank_tier = _coerce_rank(rank)
+    cache_key = "|".join([
+        region_norm or "",
+        str(rank_tier or ""),
+        map_norm or "",
+        act_norm or "",
+        role_norm or "",
+    ])
+    now = monotonic()
+    with _agent_stats_cache_lock:
+        cached = _agent_stats_cache.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
+
+    # The analytics rebuild already stores the unfiltered aggregate in regions.
+    # Reusing it removes a full scan of matches from the normal page load.
+    if rank_tier is None and map_norm is None and act_norm is None and role_norm is None:
+        query = {"region": region_norm} if region_norm else {}
+        docs = list(
+            regions_collection.find(
+                query,
+                {
+                    "_id": 0,
+                    "region": 1,
+                    "agentStats": 1,
+                    "totalMatches": 1,
+                    "updatedAt": 1,
+                },
+            )
+        )
+        if len(docs) == 1 and isinstance(docs[0].get("agentStats"), dict):
+            agent_stats = docs[0]["agentStats"]
+            payload = {
+                "filters": {
+                    "region": region_norm,
+                    "rank": None,
+                    "map": None,
+                    "act": None,
+                    "role": None,
+                },
+                "options": _build_options_cached(region_norm),
+                "sampleSize": {
+                    "matches": int(docs[0].get("totalMatches") or 0),
+                    "picks": sum(int(stats.get("picks") or 0) for stats in agent_stats.values()),
+                    "agents": len(agent_stats),
+                },
+                "warnings": [],
+                "statsSource": "regions_precomputed",
+                "agentStats": agent_stats,
+            }
+            with _agent_stats_cache_lock:
+                _agent_stats_cache[cache_key] = (
+                    now + _AGENT_STATS_CACHE_TTL_SECONDS,
+                    payload,
+                )
+            return payload
 
     query = _base_match_query(region_norm, map_norm, act_norm)
     projection = {
@@ -649,7 +707,13 @@ def get_global_agent_stats(
         "matchInfo.matchId": 1,
         "players.characterId": 1,
         "players.competitiveTier": 1,
-        "players.analytics": 1,
+        "players.analytics.agent_name": 1,
+        "players.analytics.role": 1,
+        "players.analytics.won_match": 1,
+        **{
+            f"players.analytics.overview.{field}": 1
+            for field in _SUM_FIELDS
+        },
     }
 
     agents = defaultdict(lambda: {
@@ -723,7 +787,7 @@ def get_global_agent_stats(
     elif filtered_picks < 100:
         warnings.append("Muestra global baja para el subconjunto filtrado.")
 
-    return {
+    payload = {
         "filters": {
             "region": region_norm,
             "rank": str(rank_tier) if rank_tier is not None else None,
@@ -740,6 +804,12 @@ def get_global_agent_stats(
         "warnings": warnings,
         "agentStats": agent_stats,
     }
+    with _agent_stats_cache_lock:
+        _agent_stats_cache[cache_key] = (
+            now + _AGENT_STATS_CACHE_TTL_SECONDS,
+            payload,
+        )
+    return payload
 
 
 def get_global_map_stats(

@@ -5,7 +5,7 @@ from itertools import product
 from typing import Any
 
 from .ability_catalog import agent_abilities
-from .content_catalog import find_gear, find_weapon, load_gear_catalog, load_weapon_catalog
+from .content_catalog import find_gear, find_weapon, load_gear_catalog, load_weapon_catalog, weapon_role
 from .inventory import PlayerInventoryState
 
 
@@ -27,6 +27,14 @@ def _weapon_value(item: dict | None) -> float:
 def _armor_value(item: dict | None) -> float:
     value = (item or {}).get("armor_value")
     return float(value if value is not None else _price(item))
+
+
+def _compact_catalog_item(item: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep recommendation features without repeating the source API document."""
+    return {
+        key: value for key, value in (item or {}).items()
+        if key not in {"raw", "shopData"}
+    }
 
 
 @dataclass
@@ -73,7 +81,7 @@ class LegalPurchaseGenerator:
             catalog_weapon = find_weapon(state.weapon_before_buy)
             catalog_value = _price(catalog_weapon)
             carried = {
-                **(catalog_weapon or {}),
+                **_compact_catalog_item(catalog_weapon),
                 "displayName": (catalog_weapon or {}).get("displayName") or state.weapon_before_buy,
                 "cost": 0,
                 "purchase_cost": 0,
@@ -88,7 +96,7 @@ class LegalPurchaseGenerator:
         purchasable = [w for w in load_weapon_catalog().values() if w.get("cost") is not None]
         purchasable.sort(key=_price)
         weapons.extend({
-            **weapon,
+            **_compact_catalog_item(weapon),
             "purchase_cost": _price(weapon),
             "weapon_value": _price(weapon),
             "source": "bought_self",
@@ -103,7 +111,7 @@ class LegalPurchaseGenerator:
             ratio = max(0.0, min(1.0, float(remaining) / maximum)) if maximum and remaining is not None else 0.75
             effective_value = catalog_value * ratio
             carried_armor = {
-                **(catalog_armor or {}),
+                **_compact_catalog_item(catalog_armor),
                 "displayName": (catalog_armor or {}).get("displayName") or state.armor_before_buy,
                 "cost": 0,
                 "purchase_cost": 0,
@@ -117,7 +125,7 @@ class LegalPurchaseGenerator:
                 carried_armor["warnings"] = ["carried_armor_missing_catalog"]
             armors.append(carried_armor)
         armors.extend({
-            **gear,
+            **_compact_catalog_item(gear),
             "purchase_cost": _price(gear),
             "armor_value": _price(gear),
             "source": "bought_self",
@@ -180,6 +188,53 @@ class LegalPurchaseGenerator:
             max(plans, key=lambda p: (p.get("ability_cost", 0), -p.get("self_cost", 0))),
             min(plans, key=lambda p: p.get("self_cost", 0)),
         ]
+        if (context or {}).get("is_pistol_round"):
+            def weapon_name(plan: dict[str, Any]) -> str:
+                return str((plan.get("weapon") or {}).get("displayName") or "").lower()
+
+            for name in ("ghost", "frenzy", "shorty"):
+                candidates = [
+                    plan for plan in plans
+                    if weapon_name(plan) == name and not plan.get("requires_weapon_drop")
+                ]
+                if candidates:
+                    must_keep.append(max(candidates, key=lambda p: (
+                        p.get("ability_cost", 0), _armor_value(p.get("armor")),
+                        -p.get("self_cost", 0),
+                    )))
+            classic_armor = [
+                plan for plan in plans
+                if weapon_name(plan) in {"", "classic"}
+                and _armor_value(plan.get("armor")) >= 400
+            ]
+            if classic_armor:
+                must_keep.append(max(classic_armor, key=lambda p: (
+                    p.get("ability_cost", 0), -p.get("self_cost", 0),
+                )))
+        # Evenly sampling a cost-sorted list can discard the strategically
+        # important middle: protected weapons with enough utility. Preserve
+        # those anchors before the team solver reduces the list again.
+        protected = [
+            plan for plan in plans
+            if not plan.get("requires_weapon_drop")
+            and _weapon_value(plan.get("weapon")) >= 1600 and _armor_value(plan.get("armor")) >= 400
+        ]
+        if protected:
+            must_keep.append(max(protected, key=lambda p: (
+                p.get("ability_cost", 0), _weapon_value(p.get("weapon")),
+                _armor_value(p.get("armor")), -p.get("self_cost", 0),
+            )))
+        rifle_buy = [
+            plan for plan in plans
+            if not plan.get("requires_weapon_drop")
+            and weapon_role(str((plan.get("weapon") or {}).get("displayName") or "").lower()) == "rifle"
+            and _armor_value(plan.get("armor")) >= 400
+        ]
+        if rifle_buy:
+            must_keep.append(max(rifle_buy, key=lambda p: (
+                p.get("ability_cost", 0), _armor_value(p.get("armor")),
+                _weapon_value(p.get("weapon")), -p.get("self_cost", 0),
+            )))
         carried = next((p for p in plans if p.get("keep_weapon")), None)
         if carried:
             must_keep.append(carried)

@@ -46,9 +46,15 @@ def load_metadata() -> dict:
 def save_metadata(metadata: dict, artifacts_dir: Path | None = None) -> None:
     root = artifacts_dir or ARTIFACTS_DIR
     root.mkdir(parents=True, exist_ok=True)
-    (root / "metadata.json").write_text(
+    target = root / "metadata.json"
+    temporary = root / ".metadata.json.tmp"
+    temporary.write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    # Atomic replacement also avoids retaining a broken ACL from an older
+    # metadata file, which can make a successfully activated model invisible
+    # to the registry on Windows.
+    temporary.replace(target)
 
 
 def clear_model_artifacts(artifacts_dir: Path | None = None) -> None:
@@ -62,41 +68,81 @@ def clear_model_artifacts(artifacts_dir: Path | None = None) -> None:
 
 
 def publish_model_artifacts(staging_dir: Path) -> None:
-    """Replace live model files only after a complete staging directory exists."""
+    """Publish a validated v12 candidate without replacing live artifacts."""
     metadata_path = staging_dir / "metadata.json"
     staged_models = list(staging_dir.glob("*.joblib"))
     if not staged_models or not metadata_path.exists():
         raise ValueError("No hay modelos entrenados para publicar")
 
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    backup_dir = ARTIFACTS_DIR / ".previous_models"
-    if backup_dir.exists():
-        shutil.rmtree(backup_dir)
-    backup_dir.mkdir()
-    moved_live: list[Path] = []
-    try:
-        for path in list(ARTIFACTS_DIR.glob("*.joblib")) + [METADATA_PATH]:
+    candidate_dir = ARTIFACTS_DIR / "v12_candidate"
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    candidate_snapshot = candidate_dir / ".previous"
+    if candidate_snapshot.exists():
+        shutil.rmtree(candidate_snapshot)
+    current_candidate_files = list(candidate_dir.glob("*.joblib"))
+    candidate_metadata = candidate_dir / "metadata.json"
+    if current_candidate_files or candidate_metadata.exists():
+        candidate_snapshot.mkdir()
+        for path in current_candidate_files + [candidate_metadata]:
             if path.exists():
-                shutil.move(str(path), str(backup_dir / path.name))
-                moved_live.append(path)
-        for path in staged_models + [metadata_path]:
-            shutil.move(str(path), str(ARTIFACTS_DIR / path.name))
-    except Exception:
-        for path in list(ARTIFACTS_DIR.glob("*.joblib")) + [METADATA_PATH]:
-            if path.exists():
-                path.unlink()
-        for original_path in moved_live:
-            backup_path = backup_dir / original_path.name
-            if backup_path.exists():
-                shutil.move(str(backup_path), str(original_path))
-        raise
-    finally:
-        if backup_dir.exists():
-            shutil.rmtree(backup_dir)
+                shutil.move(str(path), str(candidate_snapshot / path.name))
+    for path in staged_models + [metadata_path]:
+        shutil.copy2(path, candidate_dir / path.name)
+    # v12 remains a candidate until validation explicitly activates it. The
+    # current live artifacts and their snapshot are intentionally untouched.
+
+
+def activate_v12_candidate(*, deployment_mode: str = "full") -> dict[str, Any]:
+    if deployment_mode not in {"full", "prediction_only", "experimental_full"}:
+        raise ValueError(f"Modo de despliegue no soportado: {deployment_mode}")
+    candidate_dir = ARTIFACTS_DIR / "v12_candidate"
+    candidate_metadata = candidate_dir / "metadata.json"
+    candidate_models = list(candidate_dir.glob("*.joblib"))
+    if not candidate_models or not candidate_metadata.exists():
+        raise ValueError("No existe un candidato v12 completo")
+    metadata = json.loads(candidate_metadata.read_text(encoding="utf-8"))
+    if metadata.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("El candidato no coincide con el contrato económico activo")
+    snapshot_dir = ARTIFACTS_DIR / ".pre_v12_activation"
+    if snapshot_dir.exists():
+        shutil.rmtree(snapshot_dir)
+    snapshot_dir.mkdir(parents=True)
+    for path in list(ARTIFACTS_DIR.glob("*.joblib")) + [METADATA_PATH]:
+        if path.exists():
+            shutil.copy2(path, snapshot_dir / path.name)
+    for path in list(ARTIFACTS_DIR.glob("*.joblib")):
+        path.unlink()
+    for path in candidate_models:
+        shutil.copy2(path, ARTIFACTS_DIR / path.name)
+    active_metadata = dict(metadata)
+    active_metadata["deployment_mode"] = deployment_mode
+    active_metadata["policy_enabled"] = deployment_mode in {"full", "experimental_full"}
+    active_metadata["policy_validation_passed"] = deployment_mode == "full"
+    active_metadata["experimental_policy_override"] = deployment_mode == "experimental_full"
+    if deployment_mode == "prediction_only":
+        active_metadata["policy_block_reason"] = (
+            "La politica no supera el intervalo de mejora; el artefacto se usa solo para prediccion."
+        )
+    elif deployment_mode == "experimental_full":
+        active_metadata["policy_warning"] = (
+            "Politica experimental activada por solicitud explicita; no ha demostrado mejora "
+            "doubly robust frente a las reglas."
+        )
+    save_metadata(active_metadata, ARTIFACTS_DIR)
+    return {
+        "activated": True,
+        "schema_version": SCHEMA_VERSION,
+        "deployment_mode": deployment_mode,
+        "policy_enabled": active_metadata["policy_enabled"],
+        "snapshot": str(snapshot_dir),
+        "artifacts": [path.name for path in candidate_models],
+    }
 
 
 def load_model_candidates(rank_name: str | None, rank_group: str | None) -> list[tuple[dict, str]]:
-    if load_metadata().get("schema_version") != SCHEMA_VERSION:
+    metadata = load_metadata()
+    if metadata.get("schema_version") != SCHEMA_VERSION:
         return []
     loaded: list[tuple[dict, str]] = []
     candidates = [
@@ -108,6 +154,11 @@ def load_model_candidates(rank_name: str | None, rank_group: str | None) -> list
             try:
                 bundle = joblib.load(path)
                 if bundle.get("schema_version") == SCHEMA_VERSION:
+                    bundle["deployment_mode"] = metadata.get("deployment_mode", "full")
+                    bundle["deployment_policy_enabled"] = bool(metadata.get("policy_enabled", True))
+                    bundle["experimental_policy_override"] = bool(
+                        metadata.get("experimental_policy_override", False)
+                    )
                     loaded.append((bundle, scope))
             except Exception:
                 continue
@@ -122,6 +173,19 @@ def load_best_model(rank_name: str | None, rank_group: str | None) -> tuple[dict
 def status() -> dict[str, Any]:
     metadata = load_metadata()
     paths = list(ARTIFACTS_DIR.glob("*.joblib")) if ARTIFACTS_DIR.exists() else []
+    candidate_dir = ARTIFACTS_DIR / "v12_candidate"
+    candidate_ready = bool(list(candidate_dir.glob("*.joblib"))) and (candidate_dir / "metadata.json").exists()
     if not paths or metadata.get("schema_version") != SCHEMA_VERSION:
-        return {"available": False, "reason": "No hay modelo entrenado todavía"}
-    return {"available": True, "metadata": metadata, "artifacts": [path.name for path in paths]}
+        return {
+            "available": False,
+            "reason": "No hay un modelo v12 activado todavía",
+            "candidate_v12_ready": candidate_ready,
+        }
+    return {
+        "available": True,
+        "metadata": metadata,
+        "deployment_mode": metadata.get("deployment_mode", "full"),
+        "policy_enabled": bool(metadata.get("policy_enabled", True)),
+        "artifacts": [path.name for path in paths],
+        "candidate_v12_ready": candidate_ready,
+    }

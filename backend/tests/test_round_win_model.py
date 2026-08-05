@@ -9,7 +9,7 @@ from modules.economy_ml.round_win_dataset import (ROUND_WIN_FEATURES, build_roun
                                                    validate_round_win_dataset)
 from modules.economy_ml.round_win_model import RoundWinLoadoutModel, validate_round_win_features
 from modules.economy_ml.train_round_win_model import train_round_win_model
-from modules.economy_ml.train import _temporal_split
+from modules.economy_ml.train import _temporal_policy_split, _temporal_split
 
 
 class RoundWinModelTests(unittest.TestCase):
@@ -60,6 +60,25 @@ class RoundWinModelTests(unittest.TestCase):
             self.assertGreaterEqual(prediction["round_win_probability"], 0)
             self.assertLessEqual(prediction["round_win_probability"], 1)
 
+    def test_batch_predictions_match_single_predictions(self):
+        dataset = build_round_win_dataset(self._source())
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "round_win.joblib"
+            train_round_win_model(dataset, artifact_path=artifact, min_samples=20)
+            model = RoundWinLoadoutModel(artifact)
+            rows = [
+                dataset.iloc[index][ROUND_WIN_FEATURES].to_dict()
+                for index in range(3)
+            ]
+            singles = [model.predict_round_win(row) for row in rows]
+            batched = model.predict_round_wins(rows)
+            for batch_item, single_item in zip(batched, singles):
+                self.assertAlmostEqual(
+                    batch_item["round_win_probability"],
+                    single_item["round_win_probability"],
+                    places=12,
+                )
+
     def test_insufficient_dataset_does_not_publish(self):
         dataset = build_round_win_dataset(self._source(4))
         with tempfile.TemporaryDirectory() as directory:
@@ -82,6 +101,17 @@ class RoundWinModelTests(unittest.TestCase):
         self.assertTrue(set(calibration.match_id).isdisjoint(test.match_id))
         self.assertLess(train.game_start_millis.max(), calibration.game_start_millis.min())
         self.assertLess(calibration.game_start_millis.max(), test.game_start_millis.min())
+
+    def test_policy_split_has_four_disjoint_temporal_blocks(self):
+        dataset = build_round_win_dataset(self._source(120))
+        train, calibration, selection, test = _temporal_policy_split(dataset)
+        blocks = [train, calibration, selection, test]
+        for index, left in enumerate(blocks):
+            for right in blocks[index + 1:]:
+                self.assertTrue(set(left.match_id).isdisjoint(right.match_id))
+        self.assertLess(train.game_start_millis.max(), calibration.game_start_millis.min())
+        self.assertLess(calibration.game_start_millis.max(), selection.game_start_millis.min())
+        self.assertLess(selection.game_start_millis.max(), test.game_start_millis.min())
 
     def test_action_values_do_not_double_count_armor(self):
         source = self._source(2)

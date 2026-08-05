@@ -91,6 +91,9 @@ class ParallelIngestionPipelineTests(unittest.TestCase):
 
         try:
             sys.modules["modules.matches.infrastructure.mongo_match_repo"] = fake_repo
+            infrastructure_package = importlib.import_module("modules.matches.infrastructure")
+            previous_repo_attribute = getattr(infrastructure_package, "mongo_match_repo", None)
+            infrastructure_package.mongo_match_repo = fake_repo
             sys.modules["modules.analytics.domain.extractor"] = fake_extractor
             sys.modules["modules.players.application.update_player_from_match"] = fake_players
             sys.modules["scripts.regions_update"] = fake_regions
@@ -109,6 +112,10 @@ class ParallelIngestionPipelineTests(unittest.TestCase):
                 "already_exists",
             )
         finally:
+            if previous_repo_attribute is None:
+                infrastructure_package.__dict__.pop("mongo_match_repo", None)
+            else:
+                infrastructure_package.mongo_match_repo = previous_repo_attribute
             for name, module in originals.items():
                 if module is None:
                     sys.modules.pop(name, None)

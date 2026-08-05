@@ -12,6 +12,13 @@ BUY_ACTIONS = [
     "BONUS_KEEP_WEAPONS", "MIXED_LOW_BUY", "UNKNOWN",
 ]
 
+
+def _outlay(economy: dict[str, Any]) -> float:
+    for key in ("totalOutlay", "derivedSpend", "total_outlay"):
+        if economy.get(key) is not None:
+            return max(0.0, float(economy.get(key) or 0))
+    return 0.0
+
 def _norm(value: Any) -> str:
     return str(value or "").strip().lower().replace("_", " ")
 
@@ -56,7 +63,7 @@ def classify_team_buy_action(
         return "UNKNOWN"
     weapons = [economy.get("weapon") for economy in economies]
     total = sum(float(economy.get("loadoutValue") or 0) for economy in economies)
-    spent = sum(float(economy.get("spent") or 0) for economy in economies)
+    spent = sum(_outlay(economy) for economy in economies)
     rifles = sum(is_rifle(weapon) for weapon in weapons)
     smgs = sum(is_smg(weapon) for weapon in weapons)
     machine_guns = sum(is_machine_gun(weapon) for weapon in weapons)

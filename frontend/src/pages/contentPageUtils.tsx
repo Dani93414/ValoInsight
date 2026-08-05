@@ -1,5 +1,6 @@
 import type { ChangeEvent, ReactNode } from "react";
 import BackButton from "../components/BackButton";
+import PageLoadingScreen from "../components/ui/PageLoadingScreen";
 
 type ContentShellProps = {
   eyebrow?: string;
@@ -30,22 +31,12 @@ export function ContentShell({
   );
 }
 
-export function ContentLoading({
-  title = "Cargando contenido",
-  message = "Preparando datos...",
-}: {
+export function ContentLoading(props: {
   title?: string;
   message?: string;
 }) {
-  return (
-    <div className="loading-screen" role="status" aria-live="polite">
-      <div className="loading-card">
-        <div className="loading-spinner" />
-        <h2>{title}</h2>
-        <p>{message}</p>
-      </div>
-    </div>
-  );
+  void props;
+  return <PageLoadingScreen />;
 }
 
 export function ContentError({

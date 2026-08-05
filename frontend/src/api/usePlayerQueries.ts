@@ -63,11 +63,14 @@ export function useMatchById(matchId: string | null) {
   });
 }
 
-export function useMatchEconomyMl(matchId: string | null) {
+export function useMatchEconomyMl(
+  matchId: string | null,
+  enabled = true,
+) {
   return useQuery({
     queryKey: ["match", matchId, "economy-ml"],
     queryFn: () => getMatchEconomyMl(matchId!),
-    enabled: !!matchId,
+    enabled: !!matchId && enabled,
     staleTime: DASHBOARD_STALE,
     retry: false,
   });

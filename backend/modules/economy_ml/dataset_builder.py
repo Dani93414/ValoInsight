@@ -119,6 +119,13 @@ def build_player_economy_dataset_from_matches(matches: list[dict]) -> pd.DataFra
                     continue
                 economy = pstat.get("economy") or {}
                 fixed_credits = fixed_round_start_credits(round_number)
+                reconstructed_prebuy = _number(
+                    (state.get("team_player_credit_estimates") or {}).get(puuid)
+                )
+                reconstructed_outlay = max(
+                    0.0,
+                    reconstructed_prebuy - _number(economy.get("remaining")),
+                )
                 agent_id = str(player.get("characterId") or "UNKNOWN")
                 rows.append({
                     "match_id": state["match_id"],
@@ -140,12 +147,11 @@ def build_player_economy_dataset_from_matches(matches: list[dict]) -> pd.DataFra
                     "enemy_score_before": state.get("enemy_score_before"),
                     "score_diff": state.get("score_diff"),
                     "player_remaining": _number(economy.get("remaining")),
-                    "player_spent": _number(economy.get("spent")),
+                    "player_spent": reconstructed_outlay,
+                    "player_spent_source": "derived_prebuy_minus_remaining",
                     "player_loadout": _number(economy.get("loadoutValue")),
                     "player_estimated_credits_before_buy": (
-                        fixed_credits
-                        if fixed_credits is not None
-                        else _number(economy.get("remaining")) + _number(economy.get("spent"))
+                        fixed_credits if fixed_credits is not None else reconstructed_prebuy
                     ),
                     **_weapon_payload(economy.get("weapon")),
                     **_armor_payload(economy.get("armor")),

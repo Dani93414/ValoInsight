@@ -1,0 +1,123 @@
+.loading-modal {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  z-index: 100;
+}
+
+.loading-modal--section {
+  min-height: 180px;
+  padding: 32px 24px;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 70, 92, 0.08), transparent 55%),
+    rgba(6, 10, 18, 0.82);
+}
+
+.loading-modal--overlay {
+  position: fixed;
+  inset: 0;
+  min-height: 100vh;
+  padding: 24px;
+  background: #03060c;
+  backdrop-filter: blur(10px);
+  z-index: 10000;
+}
+
+.loading-modal__card {
+  position: relative;
+  display: flex;
+  min-width: 190px;
+  min-height: 116px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 15px;
+  padding: 24px 30px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 18px;
+  background:
+    linear-gradient(145deg, rgba(25, 31, 45, 0.98), rgba(10, 14, 24, 0.98));
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.44),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.loading-modal--section .loading-modal__card {
+  width: 100%;
+  min-width: 0;
+  min-height: 116px;
+  padding: 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.loading-modal--section .loading-modal__card::before {
+  display: none;
+}
+
+.loading-modal__card::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #ff4655, transparent);
+  content: "";
+}
+
+.loading-modal__mascot {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  flex: 0 0 76px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.loading-modal__mascot-image {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 76px;
+  height: 76px;
+  max-width: none;
+  object-fit: contain;
+  transform-origin: center;
+  animation: loading-modal-mascot-spin 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  pointer-events: none;
+  user-select: none;
+}
+
+.loading-modal__label {
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.loading-modal__phrase {
+  max-width: 420px;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: center;
+}
+
+@keyframes loading-modal-mascot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-modal__mascot-image {
+    animation-duration: 3s;
+  }
+}

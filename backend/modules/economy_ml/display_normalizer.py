@@ -6,6 +6,11 @@ from .content_catalog import armor_role, find_gear, find_weapon
 
 
 PLACEHOLDERS = {"", "string", "none", "null", "unknown", "undefined", "n/a"}
+PUBLIC_ITEM_FIELDS = {
+    "uuid", "id", "displayName", "name", "cost", "purchase_cost",
+    "weapon_value", "armor_value", "armor_level", "source",
+    "category", "shopCategory", "api_category", "usage_profile", "warnings",
+}
 
 
 def _raw(value: Any) -> Any:
@@ -75,6 +80,23 @@ def normalize_observed_economy(economy: dict[str, Any] | None) -> dict[str, Any]
             "debug_warnings": debug}
 
 
+def compact_catalog_item(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    return {
+        key: value
+        for key, value in item.items()
+        if key in PUBLIC_ITEM_FIELDS
+    }
+
+
+def compact_purchase_for_api(purchase: dict[str, Any]) -> dict[str, Any]:
+    result = dict(purchase)
+    result["weapon"] = compact_catalog_item(purchase.get("weapon"))
+    result["armor"] = compact_catalog_item(purchase.get("armor"))
+    return result
+
+
 def normalize_purchase_for_display(purchase: dict[str, Any], *, is_pistol_round: bool = False) -> dict[str, str]:
     weapon = purchase.get("weapon") or {}
     armor = purchase.get("armor") or {}
@@ -92,15 +114,32 @@ def normalize_purchase_for_display(purchase: dict[str, Any], *, is_pistol_round:
     elif source == "carried":
         weapon_label, source_label = weapon_name, "Arma conservada"
     elif source == "dropped":
-        weapon_label, source_label = weapon_name, "Arma recibida por drop"
+        weapon_label, source_label = weapon_name, "Arma recibida de un compañero"
     elif source == "bought_self":
         weapon_label, source_label = weapon_name, "Compra propia"
     else:
         weapon_label, source_label = weapon_name, "Sin compra de arma"
     abilities = purchase.get("abilities") or []
-    ability_label = ", ".join(f"{item.get('name')} x{item.get('charges')}" for item in abilities) or "Sin compra de utilidad"
+    included_sources = {"free_round_start", "carried", "carried_and_free"}
+    purchased_abilities = [
+        item for item in abilities
+        if str(item.get("source") or "") not in included_sources
+        and float(item.get("cost") or 0) > 0
+    ]
+    included_abilities = [
+        item for item in abilities
+        if str(item.get("source") or "") in included_sources
+        or float(item.get("cost") or 0) <= 0
+    ]
+    ability_label = ", ".join(
+        f"{item.get('name')} x{item.get('charges')}" for item in purchased_abilities
+    ) or "Sin compra de habilidades"
+    included_ability_label = ", ".join(
+        f"{item.get('name')} x{item.get('charges')}" for item in included_abilities
+    ) or "Ninguna"
     return {"weapon_label": weapon_label, "armor_label": armor_name,
             "loadout_label": f"{weapon_label} + {armor_name}", "ability_label": ability_label,
+            "included_ability_label": included_ability_label,
             "spend_label": f"Gasto propio {float(purchase.get('self_cost') or 0):.0f}",
             "source_label": source_label}
 
@@ -114,7 +153,7 @@ def normalize_warning_list(warnings: list[str] | None) -> list[str]:
         human.append("Compra de habilidades estimada; Riot no expone la compra exacta de utilidad.")
     translations = {
         "low_confidence": "Inferencia con confianza baja.",
-        "team_drop_inferred_not_observed": "El drop de arma es una inferencia, no una observacion directa.",
+        "team_drop_inferred_not_observed": "El arma recibida de un compañero es una inferencia, no una observación directa.",
         "carried_weapon_missing_catalog": "El arma conservada no figura en el catalogo cargado.",
     }
     for item in raw:
