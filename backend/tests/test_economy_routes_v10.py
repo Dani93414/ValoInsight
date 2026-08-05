@@ -15,7 +15,7 @@ MATCH = {"matchInfo": {"matchId": "m"}, "players": [], "roundResults": []}
 class EconomyRoutesV10Tests(unittest.TestCase):
     def test_main_match_route_uses_player_first_engine(self):
         source = inspect.getsource(get_match_economy_ml)
-        self.assertIn("recommend_match_economy", source)
+        self.assertIn("get_match_economy_analysis", source)
         self.assertNotIn("predict_match_economy_recommendations", source)
         self.assertNotIn("ACTION_TEMPLATES", source)
 
@@ -25,7 +25,9 @@ class EconomyRoutesV10Tests(unittest.TestCase):
         with patch("modules.economy_ml.interfaces.routes.mongo_match_repo.find_by_id", return_value=MATCH):
             direct = match_economy_ml("m")
         for payload in (main, direct):
-            self.assertEqual(payload["engine"], "player_first_v10")
+            self.assertEqual(payload["engine"], "player_first_v12_decision_grade")
+            self.assertEqual(payload["compatibility_engine"], "player_first_v10")
+            self.assertEqual(payload["economy_contract_version"], 12)
             self.assertEqual(payload["match_id"], "m")
             self.assertTrue(payload["available"])
             self.assertIsInstance(payload["rounds"], list)

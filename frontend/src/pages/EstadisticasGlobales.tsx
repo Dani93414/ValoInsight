@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useArmas, useRegions } from "../api/hooks";
+import { useAgentes, useArmas, useMapas, useRegions } from "../api/hooks";
 import type {
   RegionAgentStats,
   RegionEconomyStats,
@@ -8,6 +8,8 @@ import type {
   RegionWeaponStats,
 } from "../types/globalStats";
 import type { Arma } from "../types/weapons";
+import type { Agente } from "../types/agents";
+import type { MapContent, MapGroups } from "../types/content";
 import { formatNumber, formatPercent } from "../utils/formatters";
 import {
   ContentEmpty,
@@ -17,6 +19,7 @@ import {
   ContentShell,
 } from "./contentPageUtils";
 import { normalizeText } from "./contentFormatters";
+import { calculateGlobalWeaponHeadshotPct } from "./Armas/weaponUtils";
 import "./ContentPages.css";
 import "./GlobalStats.css";
 
@@ -26,6 +29,9 @@ type RankedAgent = RegionAgentStats & { id: string };
 type RankedMap = RegionMapStats & { id: string };
 type RankedWeapon = RegionWeaponStats & { id: string; category?: string };
 type RankedEconomy = RegionEconomyStats & { id: string; label: string };
+type SortDirection = "desc" | "asc";
+type SortState = { key: string; direction: SortDirection };
+type SearchOption = { id: string; name: string; image?: string | null; meta?: string };
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "resumen", label: "Resumen" },
@@ -70,16 +76,83 @@ function getRegionLabel(region: RegionStats | undefined) {
   return region.region || "Global";
 }
 
+function getSortValue(row: unknown, path: string): string | number {
+  const value = path.split(".").reduce<unknown>((current, key) => {
+    if (!current || typeof current !== "object") return undefined;
+    return (current as Record<string, unknown>)[key];
+  }, row);
+  return typeof value === "number" ? value : normalizeText(String(value ?? ""));
+}
+
+function sortRows<T>(rows: T[], sort: SortState) {
+  const factor = sort.direction === "desc" ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const left = getSortValue(a, sort.key);
+    const right = getSortValue(b, sort.key);
+    if (typeof left === "number" && typeof right === "number") return (left - right) * factor;
+    return String(left).localeCompare(String(right), "es") * factor;
+  });
+}
+
+function SortableHeader({ label, sortKey, sort, onSort }: {
+  label: string;
+  sortKey: string;
+  sort: SortState;
+  onSort: (key: string) => void;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <th aria-sort={active ? (sort.direction === "desc" ? "descending" : "ascending") : "none"}>
+      <button className="global-sort-button" type="button" onClick={() => onSort(sortKey)}>
+        {label}<span aria-hidden="true">{active ? (sort.direction === "desc" ? "↓" : "↑") : "↕"}</span>
+      </button>
+    </th>
+  );
+}
+
+function VisualSearch({ value, placeholder, options, onChange }: {
+  value: string;
+  placeholder: string;
+  options: SearchOption[];
+  onChange: (value: string) => void;
+}) {
+  const needle = normalizeText(value);
+  const suggestions = needle
+    ? options.filter((option) => normalizeText(`${option.name} ${option.meta ?? ""}`).includes(needle)).slice(0, 8)
+    : [];
+  return (
+    <label className="global-filter global-filter--wide global-visual-search">
+      <span>Búsqueda</span>
+      <input type="search" placeholder={placeholder} value={value} onChange={(event) => onChange(event.target.value)} />
+      {suggestions.length > 0 && (
+        <div className="global-search-results" role="listbox">
+          {suggestions.map((option) => (
+            <button key={option.id} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => onChange(option.name)}>
+              <span className="global-search-thumb">
+                {option.image ? <img src={option.image} alt="" /> : option.name.charAt(0)}
+              </span>
+              <span><strong>{option.name}</strong>{option.meta && <small>{option.meta}</small>}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </label>
+  );
+}
+
 export default function EstadisticasGlobales() {
   const regionsQuery = useRegions();
+  const agentsQuery = useAgentes();
   const weaponsQuery = useArmas();
+  const mapsQuery = useMapas();
   const [selectedRegion, setSelectedRegion] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("resumen");
-  const [search, setSearch] = useState("");
+  const [searches, setSearches] = useState({ agentes: "", mapas: "", armas: "" });
   const [roleFilter, setRoleFilter] = useState("all");
-  const [mapFilter, setMapFilter] = useState("all");
   const [weaponCategoryFilter, setWeaponCategoryFilter] = useState("all");
-  const [minSample, setMinSample] = useState(0);
+  const [agentSort, setAgentSort] = useState<SortState>({ key: "picks", direction: "desc" });
+  const [mapSort, setMapSort] = useState<SortState>({ key: "matches", direction: "desc" });
+  const [weaponSort, setWeaponSort] = useState<SortState>({ key: "kills", direction: "desc" });
 
   const regions = useMemo(() => regionsQuery.data ?? [], [regionsQuery.data]);
   const effectiveSelectedRegion = selectedRegion || regions[0]?.region || "";
@@ -95,6 +168,21 @@ export default function EstadisticasGlobales() {
     });
     return map;
   }, [weaponsQuery.data]);
+
+  const agentsByName = useMemo(() => {
+    const map = new Map<string, Agente>();
+    (((agentsQuery.data as Agente[] | undefined) ?? [])).forEach((agent) => map.set(normalizeText(agent.displayName), agent));
+    return map;
+  }, [agentsQuery.data]);
+
+  const mapsByName = useMemo(() => {
+    const map = new Map<string, MapContent>();
+    const groups = (mapsQuery.data ?? {}) as MapGroups;
+    Object.values(groups).flat().forEach((item) => {
+      if (item) map.set(normalizeText(item.displayName), item);
+    });
+    return map;
+  }, [mapsQuery.data]);
 
   const agents = useMemo<RankedAgent[]>(
     () =>
@@ -120,6 +208,7 @@ export default function EstadisticasGlobales() {
           return {
             id,
             ...stats,
+            headshot_pct: calculateGlobalWeaponHeadshotPct(stats),
             category: normalizeWeaponCategory(catalog?.category),
           };
         })
@@ -149,15 +238,6 @@ export default function EstadisticasGlobales() {
     [agents],
   );
 
-  const mapOptions = useMemo(
-    () =>
-      maps
-        .map((map) => map.map_name)
-        .filter((name): name is string => Boolean(name))
-        .sort((a, b) => a.localeCompare(b, "es")),
-    [maps],
-  );
-
   const weaponCategories = useMemo(
     () =>
       Array.from(
@@ -173,30 +253,46 @@ export default function EstadisticasGlobales() {
   const filteredAgents = agents.filter((agent) => {
     const matchesSearch = normalizeText(
       `${agent.agent_name ?? ""} ${agent.role ?? ""}`,
-    ).includes(normalizeText(search));
+    ).includes(normalizeText(searches.agentes));
     const matchesRole = roleFilter === "all" || agent.role === roleFilter;
-    const matchesSample = (agent.picks ?? 0) >= minSample;
-    return matchesSearch && matchesRole && matchesSample;
+    return matchesSearch && matchesRole;
   });
 
   const filteredMaps = maps.filter((map) => {
     const matchesSearch = normalizeText(map.map_name ?? "").includes(
-      normalizeText(search),
+      normalizeText(searches.mapas),
     );
-    const matchesMap = mapFilter === "all" || map.map_name === mapFilter;
-    const matchesSample = (map.matches ?? 0) >= minSample;
-    return matchesSearch && matchesMap && matchesSample;
+    return matchesSearch;
   });
 
   const filteredWeapons = weapons.filter((weapon) => {
     const matchesSearch = normalizeText(
       `${weapon.weapon_name ?? ""} ${weapon.category ?? ""}`,
-    ).includes(normalizeText(search));
+    ).includes(normalizeText(searches.armas));
     const matchesCategory =
       weaponCategoryFilter === "all" ||
       weapon.category === weaponCategoryFilter;
-    const matchesSample = (weapon.rounds_equipped ?? 0) >= minSample;
-    return matchesSearch && matchesCategory && matchesSample;
+    return matchesSearch && matchesCategory;
+  });
+
+  const sortedAgents = sortRows(filteredAgents, agentSort);
+  const sortedMaps = sortRows(filteredMaps, mapSort);
+  const sortedWeapons = sortRows(filteredWeapons, weaponSort);
+  const toggleSort = (setter: React.Dispatch<React.SetStateAction<SortState>>, key: string) => {
+    setter((current) => ({ key, direction: current.key === key && current.direction === "desc" ? "asc" : "desc" }));
+  };
+
+  const agentSearchOptions: SearchOption[] = agents.map((agent) => {
+    const content = agentsByName.get(normalizeText(agent.agent_name));
+    return { id: agent.id, name: agent.agent_name ?? "Unknown", image: content?.displayIcon, meta: agent.role };
+  });
+  const mapSearchOptions: SearchOption[] = maps.map((map) => {
+    const content = mapsByName.get(normalizeText(map.map_name));
+    return { id: map.id, name: map.map_name ?? "Unknown", image: content?.displayIcon ?? content?.splash, meta: `${formatNumber(map.matches)} partidas` };
+  });
+  const weaponSearchOptions: SearchOption[] = weapons.map((weapon) => {
+    const content = weaponsByName.get(normalizeText(weapon.weapon_name));
+    return { id: weapon.id, name: weapon.weapon_name ?? "Unknown", image: content?.displayIcon, meta: weapon.category };
   });
 
   if (regionsQuery.isLoading) {
@@ -237,31 +333,32 @@ export default function EstadisticasGlobales() {
               </select>
             </label>
 
-            <label className="global-filter global-filter--wide">
-              <span>Búsqueda</span>
-              <input
-                type="search"
-                placeholder="Buscar agente, mapa o arma..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
+            {activeTab === "agentes" && (
+              <VisualSearch
+                value={searches.agentes}
+                placeholder="Buscar agente..."
+                options={agentSearchOptions}
+                onChange={(value) => setSearches((current) => ({ ...current, agentes: value }))}
               />
-            </label>
-
-            <label className="global-filter">
-              <span>Mínimo</span>
-              <input
-                type="number"
-                min={0}
-                value={minSample}
-                onChange={(event) =>
-                  setMinSample(Math.max(0, Number(event.target.value) || 0))
-                }
+            )}
+            {activeTab === "mapas" && (
+              <VisualSearch
+                value={searches.mapas}
+                placeholder="Buscar mapa..."
+                options={mapSearchOptions}
+                onChange={(value) => setSearches((current) => ({ ...current, mapas: value }))}
               />
-            </label>
-          </div>
-
-          <div className="global-toolbar global-toolbar--secondary">
-            <label className="global-filter">
+            )}
+            {activeTab === "armas" && (
+              <VisualSearch
+                value={searches.armas}
+                placeholder="Buscar arma..."
+                options={weaponSearchOptions}
+                onChange={(value) => setSearches((current) => ({ ...current, armas: value }))}
+              />
+            )}
+            {activeTab === "agentes" && (
+            <label className="global-filter global-filter--compact">
               <span>Rol</span>
               <select
                 value={roleFilter}
@@ -275,23 +372,9 @@ export default function EstadisticasGlobales() {
                 ))}
               </select>
             </label>
-
-            <label className="global-filter">
-              <span>Mapa</span>
-              <select
-                value={mapFilter}
-                onChange={(event) => setMapFilter(event.target.value)}
-              >
-                <option value="all">Todos</option>
-                {mapOptions.map((mapName) => (
-                  <option key={mapName} value={mapName}>
-                    {mapName}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="global-filter">
+            )}
+            {activeTab === "armas" && (
+            <label className="global-filter global-filter--compact">
               <span>Categoría</span>
               <select
                 value={weaponCategoryFilter}
@@ -307,6 +390,7 @@ export default function EstadisticasGlobales() {
                 ))}
               </select>
             </label>
+            )}
           </div>
 
           <div className="global-tabs" role="tablist">
@@ -394,27 +478,27 @@ export default function EstadisticasGlobales() {
 
           {activeTab === "agentes" && (
             <ContentSection title="Ranking de agentes">
-              {filteredAgents.length === 0 ? (
+              {sortedAgents.length === 0 ? (
                 <ContentEmpty message="No hay agentes con esos filtros." />
               ) : (
                 <table className="content-table">
                   <thead>
                     <tr>
-                      <th>Agente</th>
-                      <th>Rol</th>
-                      <th>Picks</th>
-                      <th>Pick %</th>
-                      <th>WR</th>
-                      <th>KD</th>
-                      <th>ACS</th>
-                      <th>ADR</th>
-                      <th>HS</th>
+                      <SortableHeader label="Agente" sortKey="agent_name" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="Rol" sortKey="role" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="Picks" sortKey="picks" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="Pick %" sortKey="pick_rate" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="WR" sortKey="win_rate" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="KD" sortKey="avg_kd" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="ACS" sortKey="avg_acs" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="ADR" sortKey="avg_adr" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
+                      <SortableHeader label="HS" sortKey="avg_headshot_pct" sort={agentSort} onSort={(key) => toggleSort(setAgentSort, key)} />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredAgents.map((agent) => (
+                    {sortedAgents.map((agent) => (
                       <tr key={agent.id}>
-                        <td>{agent.agent_name ?? "Unknown"}</td>
+                        <td><span className="global-name-cell">{agentsByName.get(normalizeText(agent.agent_name))?.displayIcon && <img src={agentsByName.get(normalizeText(agent.agent_name))?.displayIcon ?? ""} alt="" />}<strong>{agent.agent_name ?? "Unknown"}</strong></span></td>
                         <td>{agent.role ?? "-"}</td>
                         <td>{formatNumber(agent.picks)}</td>
                         <td>{metricPct(agent.pick_rate)}</td>
@@ -433,26 +517,26 @@ export default function EstadisticasGlobales() {
 
           {activeTab === "mapas" && (
             <ContentSection title="Ranking de mapas">
-              {filteredMaps.length === 0 ? (
+              {sortedMaps.length === 0 ? (
                 <ContentEmpty message="No hay mapas con esos filtros." />
               ) : (
                 <table className="content-table">
                   <thead>
                     <tr>
-                      <th>Mapa</th>
-                      <th>Partidas</th>
-                      <th>Rondas</th>
+                      <SortableHeader label="Mapa" sortKey="map_name" sort={mapSort} onSort={(key) => toggleSort(setMapSort, key)} />
+                      <SortableHeader label="Partidas" sortKey="matches" sort={mapSort} onSort={(key) => toggleSort(setMapSort, key)} />
+                      <SortableHeader label="Rondas" sortKey="total_rounds" sort={mapSort} onSort={(key) => toggleSort(setMapSort, key)} />
                       <th>Lado fuerte</th>
-                      <th>KD</th>
-                      <th>ACS</th>
-                      <th>ADR</th>
-                      <th>HS</th>
+                      <SortableHeader label="KD" sortKey="averages.kd_ratio" sort={mapSort} onSort={(key) => toggleSort(setMapSort, key)} />
+                      <SortableHeader label="ACS" sortKey="averages.acs" sort={mapSort} onSort={(key) => toggleSort(setMapSort, key)} />
+                      <SortableHeader label="ADR" sortKey="averages.adr" sort={mapSort} onSort={(key) => toggleSort(setMapSort, key)} />
+                      <SortableHeader label="HS" sortKey="averages.headshot_pct" sort={mapSort} onSort={(key) => toggleSort(setMapSort, key)} />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredMaps.map((map) => (
+                    {sortedMaps.map((map) => (
                       <tr key={map.id}>
-                        <td>{map.map_name ?? "Unknown"}</td>
+                        <td><span className="global-name-cell">{(() => { const content = mapsByName.get(normalizeText(map.map_name)); const image = content?.displayIcon ?? content?.splash; return image ? <img src={image} alt="" /> : null; })()}<strong>{map.map_name ?? "Unknown"}</strong></span></td>
                         <td>{formatNumber(map.matches)}</td>
                         <td>{formatNumber(map.total_rounds)}</td>
                         <td>{getBestSide(map)}</td>
@@ -470,25 +554,25 @@ export default function EstadisticasGlobales() {
 
           {activeTab === "armas" && (
             <ContentSection title="Ranking de armas">
-              {filteredWeapons.length === 0 ? (
+              {sortedWeapons.length === 0 ? (
                 <ContentEmpty message="No hay armas con esos filtros." />
               ) : (
                 <table className="content-table">
                   <thead>
                     <tr>
-                      <th>Arma</th>
-                      <th>Categoría</th>
-                      <th>Kills</th>
-                      <th>Rondas equipada</th>
-                      <th>Deaths</th>
-                      <th>HS</th>
-                      <th>Daño</th>
+                      <SortableHeader label="Arma" sortKey="weapon_name" sort={weaponSort} onSort={(key) => toggleSort(setWeaponSort, key)} />
+                      <SortableHeader label="Categoría" sortKey="category" sort={weaponSort} onSort={(key) => toggleSort(setWeaponSort, key)} />
+                      <SortableHeader label="Kills" sortKey="kills" sort={weaponSort} onSort={(key) => toggleSort(setWeaponSort, key)} />
+                      <SortableHeader label="Rondas equipada" sortKey="rounds_equipped" sort={weaponSort} onSort={(key) => toggleSort(setWeaponSort, key)} />
+                      <SortableHeader label="Deaths" sortKey="deaths" sort={weaponSort} onSort={(key) => toggleSort(setWeaponSort, key)} />
+                      <SortableHeader label="HS" sortKey="headshot_pct" sort={weaponSort} onSort={(key) => toggleSort(setWeaponSort, key)} />
+                      <SortableHeader label="Daño" sortKey="damage_dealt" sort={weaponSort} onSort={(key) => toggleSort(setWeaponSort, key)} />
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredWeapons.map((weapon) => (
+                    {sortedWeapons.map((weapon) => (
                       <tr key={weapon.id}>
-                        <td>{weapon.weapon_name ?? "Unknown"}</td>
+                        <td><span className="global-name-cell">{weaponsByName.get(normalizeText(weapon.weapon_name))?.displayIcon && <img src={weaponsByName.get(normalizeText(weapon.weapon_name))?.displayIcon ?? ""} alt="" />}<strong>{weapon.weapon_name ?? "Unknown"}</strong></span></td>
                         <td>{weapon.category ?? "-"}</td>
                         <td>{formatNumber(weapon.kills)}</td>
                         <td>{formatNumber(weapon.rounds_equipped)}</td>

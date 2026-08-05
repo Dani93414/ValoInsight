@@ -136,6 +136,8 @@ class EconomyLedgerTests(unittest.TestCase):
 
     def test_free_light_armor_exception(self):
         stats = _stats(remaining=0, spent=800, loadout=1200, weapon="Sheriff", armor="Light")
+        for stat in stats:
+            stat["economy"]["totalOutlay"] = 800
         match = _match([{"roundNum": 13, "winningTeam": "A", "winningTeamRole": "attack", "playerStats": stats}])
         ledger = build_player_round_ledger(match=match, round_index=0, team_id="A", puuid="A0", previous_player_state=None)
         self.assertIn("free_light_armor_exception", ledger["flags"])
@@ -147,6 +149,8 @@ class EconomyLedgerTests(unittest.TestCase):
     def test_possible_afk_bonus_reconciliation(self):
         round1 = {"roundNum": 1, "winningTeam": "A", "winningTeamRole": "attack", "playerStats": _stats(remaining=900, spent=0)}
         round2_stats = _stats(remaining=4500, spent=0)
+        for stat in round2_stats:
+            stat["economy"]["creditsBeforeBuy"] = 4500
         match = _match([round1, {"roundNum": 2, "winningTeam": "B", "winningTeamRole": "attack", "playerStats": round2_stats}])
         ledger = build_player_round_ledger(match=match, round_index=0, team_id="A", puuid="A0", previous_player_state=None)
         self.assertEqual(ledger["reconciliation_status"], "observed_more_than_expected")

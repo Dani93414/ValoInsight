@@ -114,6 +114,7 @@ export function AgentInlineDetail({
   const statsPanelId = useId();
   const abilitiesPanelId = useId();
   const stats = agent.globalStats;
+  const hasStats = Boolean(stats && (stats.picks ?? stats.matches ?? 0) > 0);
   const showComparison =
     hasSession &&
     Boolean(agent.personalStats?.picks) &&
@@ -152,9 +153,13 @@ export function AgentInlineDetail({
               <span className="agents-section-eyebrow">Ficha táctica</span>
               <h2 className="agent-detail-name">{agent.displayName}</h2>
             </div>
-            <span className={`agent-tier-badge agent-tier-badge--${agent.tier.toLowerCase()}`}>
-              Tier {agent.tier}
-            </span>
+            {hasStats ? (
+              <span className={`agent-tier-badge agent-tier-badge--${agent.tier.toLowerCase()}`}>
+                Tier {agent.tier}
+              </span>
+            ) : (
+              <span className="agent-unavailable-detail-badge">Agente sin salir</span>
+            )}
           </div>
 
           <div className="agent-role-badge" aria-label={`Rol: ${agent.role.displayName}`}>
@@ -169,16 +174,16 @@ export function AgentInlineDetail({
 
           <p className="agent-description">{agent.description}</p>
 
-          <div className="agent-quick-kpis" aria-label="KPIs del agente">
+          {hasStats && <div className="agent-quick-kpis" aria-label="KPIs del agente">
             {quickStats.map((item) => (
               <div key={item.label}>
                 <span>{item.label}</span>
                 <strong>{item.value}</strong>
               </div>
             ))}
-          </div>
+          </div>}
 
-          {agent.lowSample && <span className="sample-reliability-badge">Baja muestra</span>}
+          {hasStats && agent.lowSample && <span className="sample-reliability-badge">Baja muestra</span>}
         </div>
 
         <div className="agent-detail-right">
@@ -191,7 +196,7 @@ export function AgentInlineDetail({
         </div>
       </div>
 
-      <section className="agent-profile-section" aria-labelledby="agent-profile-title">
+      {hasStats && <section className="agent-profile-section" aria-labelledby="agent-profile-title">
         <div className="agent-detail-section-heading">
           <span className="agents-section-eyebrow">Perfil</span>
           <h3 id="agent-profile-title">Dimensiones analíticas</h3>
@@ -207,9 +212,9 @@ export function AgentInlineDetail({
             </div>
           ))}
         </div>
-      </section>
+      </section>}
 
-      <section className="agent-detail-section">
+      {hasStats && <section className="agent-detail-section">
         <button
           type="button"
           className="agent-accordion-toggle"
@@ -268,7 +273,7 @@ export function AgentInlineDetail({
             )}
           </div>
         )}
-      </section>
+      </section>}
 
       <section className="agent-detail-section">
         <button

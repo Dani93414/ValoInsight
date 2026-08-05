@@ -12,6 +12,7 @@ import {
   Cell,
 } from "recharts";
 import { useLocation, useNavigate } from "react-router-dom";
+import LoadingModal from "../ui/LoadingModal";
 import {
   formatNumber,
   formatPercent,
@@ -285,7 +286,7 @@ export default function WeaponDetailModal({
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="empty-chart">Cargando grafico...</div>
+                      <LoadingModal placement="section" />
                     )
                   ) : (
                     <div className="empty-chart">Sin historial reciente.</div>
@@ -366,7 +367,7 @@ export default function WeaponDetailModal({
                         </div>
                       </>
                     ) : (
-                      <div className="empty-chart">Cargando grafico...</div>
+                      <LoadingModal placement="section" />
                     )
                   ) : (
                     <div className="empty-chart">Sin datos de impactos.</div>

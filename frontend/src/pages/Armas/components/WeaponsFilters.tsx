@@ -1,4 +1,4 @@
-import type { WeaponFilterSummary, WeaponSortKey, WeaponStatsFilter } from "../types";
+import type { WeaponFilterSummary, WeaponSortKey } from "../types";
 
 type Props = {
   activeCategory: string;
@@ -6,13 +6,11 @@ type Props = {
   categories: string[];
   search: string;
   sortKey: WeaponSortKey;
-  statsFilter: WeaponStatsFilter;
   summary: WeaponFilterSummary;
   onCategoryChange: (value: string) => void;
   onCostChange: (value: string) => void;
   onSearchChange: (value: string) => void;
   onSortChange: (value: WeaponSortKey) => void;
-  onStatsFilterChange: (value: WeaponStatsFilter) => void;
   onResetFilters: () => void;
   onClearFilter: (key: WeaponFilterSummary["activeFilters"][number]["key"]) => void;
 };
@@ -27,27 +25,17 @@ const sortOptions: Array<{ value: WeaponSortKey; label: string }> = [
   { value: "fireRate", label: "Cadencia" },
 ];
 
-const statsOptions: Array<{ value: WeaponStatsFilter; label: string }> = [
-  { value: "all", label: "Todas" },
-  { value: "withStats", label: "Con estadísticas" },
-  { value: "withoutStats", label: "Sin estadísticas" },
-  { value: "weapons", label: "Solo armas" },
-  { value: "shields", label: "Solo escudos" },
-];
-
 export function WeaponsFilters({
   activeCategory,
   activeCost,
   categories,
   search,
   sortKey,
-  statsFilter,
   summary,
   onCategoryChange,
   onCostChange,
   onSearchChange,
   onSortChange,
-  onStatsFilterChange,
   onResetFilters,
   onClearFilter,
 }: Props) {
@@ -105,21 +93,6 @@ export function WeaponsFilters({
           <option value="Gratis">Gratis</option>
           <option value="Economicas">Económicas</option>
           <option value="Premium">Premium</option>
-        </select>
-
-        <select
-          className="weapons-select"
-          value={statsFilter}
-          onChange={(event) =>
-            onStatsFilterChange(event.target.value as WeaponStatsFilter)
-          }
-          aria-label="Filtrar por estadísticas"
-        >
-          {statsOptions.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
         </select>
 
         <select

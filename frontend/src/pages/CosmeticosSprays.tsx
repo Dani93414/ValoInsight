@@ -8,7 +8,12 @@ import {
   ContentLoading,
   ContentShell,
 } from "./contentPageUtils";
-import { hideBrokenImage, normalizeText } from "./contentFormatters";
+import { useProgressiveList } from "../hooks/useProgressiveList";
+import {
+  fallbackToOriginalImage,
+  getImageDerivative,
+  normalizeText,
+} from "./contentFormatters";
 import "./ContentPages.css";
 
 type AnimationFilter = "all" | "animated" | "static";
@@ -79,6 +84,10 @@ export default function CosmeticosSprays() {
       return matchesSearch && matchesAnimation;
     });
   }, [animationFilter, search, sprays]);
+  const progressive = useProgressiveList(
+    filteredSprays,
+    `${search}:${animationFilter}:${filteredSprays.length}`,
+  );
 
   const selectedKey = selectedSpray ? selectedSpray.uuid ?? selectedSpray.displayName : null;
   const selectedIndex = selectedKey
@@ -157,9 +166,12 @@ export default function CosmeticosSprays() {
           <div className="csprays-preview-box">
             {selectedSpray.displayIcon ? (
               <img
-                src={selectedSpray.displayIcon}
+                src={getImageDerivative(selectedSpray.displayIcon, "medium")}
                 alt={`Icono de ${selectedSpray.displayName}`}
-                onError={hideBrokenImage}
+                decoding="async"
+                onError={(event) =>
+                  fallbackToOriginalImage(event, selectedSpray.displayIcon ?? "")
+                }
               />
             ) : (
               <div className="csprays-empty">Sin icono</div>
@@ -171,9 +183,15 @@ export default function CosmeticosSprays() {
           <div className="csprays-preview-box">
             {getSprayDetailImage(selectedSpray) ? (
               <img
-                src={getSprayDetailImage(selectedSpray) ?? ""}
+                src={getImageDerivative(getSprayDetailImage(selectedSpray), "medium")}
                 alt={selectedSpray.displayName}
-                onError={hideBrokenImage}
+                decoding="async"
+                onError={(event) =>
+                  fallbackToOriginalImage(
+                    event,
+                    getSprayDetailImage(selectedSpray) ?? "",
+                  )
+                }
               />
             ) : (
               <div className="csprays-empty">Sin imagen</div>
@@ -243,8 +261,9 @@ export default function CosmeticosSprays() {
           {filteredSprays.length === 0 ? (
             <ContentEmpty message="No hay resultados con esa busqueda." />
           ) : (
-            <div className="content-grid csprays-grid" ref={gridRef}>
-              {filteredSprays.map((item, index) => {
+            <>
+              <div className="content-grid csprays-grid" ref={gridRef}>
+              {progressive.visibleItems.map((item, index) => {
                 const itemKey = item.uuid ?? item.displayName;
                 const active = selectedKey === itemKey;
                 const image = getSprayPreview(item);
@@ -263,10 +282,13 @@ export default function CosmeticosSprays() {
                         <span className="content-card-image-wrap csprays-card-image-wrap">
                           <img
                             className="content-card-image csprays-card-image"
-                            src={image}
+                            src={getImageDerivative(image, "thumb")}
                             alt={item.displayName}
                             loading="lazy"
-                            onError={hideBrokenImage}
+                            decoding="async"
+                            onError={(event) =>
+                              fallbackToOriginalImage(event, image)
+                            }
                           />
                         </span>
                       )}
@@ -280,7 +302,15 @@ export default function CosmeticosSprays() {
                   </div>
                 );
               })}
-            </div>
+              </div>
+              {progressive.hasMore && (
+                <div ref={progressive.sentinelRef} className="content-load-more">
+                  <button type="button" onClick={progressive.showMore}>
+                    Mostrar más ({filteredSprays.length - progressive.visibleCount})
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

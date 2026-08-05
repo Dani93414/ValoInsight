@@ -17,6 +17,9 @@ export const STAT_LABELS: Record<string, string> = {
   altFireType: "Modo alternativo",
   zoomMultiplier: "Multiplicador de zoom",
   burstCount: "Disparos por ráfaga",
+  adsStats: "Estadísticas al apuntar con mira",
+  altShotgunStats: "Estadísticas del disparo alternativo",
+  airBurstStats: "Estadísticas de explosión aérea",
 };
 
 const VALUE_TRANSLATIONS: Record<string, string> = {
@@ -36,7 +39,17 @@ const VALUE_TRANSLATIONS: Record<string, string> = {
 };
 
 const FEATURE_TRANSLATIONS: Array<{ includes: string; label: string }> = [
+  { includes: "rofincrease", label: "Cadencia progresiva: aumenta al mantener el disparo." },
+  { includes: "rof increase", label: "Cadencia progresiva: aumenta al mantener el disparo." },
+  { includes: "rate of fire increase", label: "Cadencia progresiva: aumenta al mantener el disparo." },
+  { includes: "ads", label: "Mira: permite apuntar para mejorar el control y la precisión." },
+  { includes: "dualzoom", label: "Zoom doble: permite alternar entre dos aumentos de mira." },
+  { includes: "dual zoom", label: "Zoom doble: permite alternar entre dos aumentos de mira." },
+  { includes: "airburst", label: "Explosión aérea: detona en el aire o por tiempo." },
+  { includes: "shotgun", label: "Disparo de escopeta: lanza varios perdigones." },
+  { includes: "speed decrease", label: "Ralentización: reduce la velocidad del objetivo impactado." },
   { includes: "silencer", label: "Silenciador: reduce traza sonora y visual de disparo." },
+  { includes: "silenced", label: "Silenciador: reduce traza sonora y visual de disparo." },
   { includes: "suppressor", label: "Silenciador: reduce traza sonora y visual de disparo." },
   { includes: "zoom", label: "Zoom: mejora precisión al apuntar con mira." },
   { includes: "burst", label: "Ráfaga: dispara varias balas por activación." },
@@ -94,10 +107,10 @@ export function formatWeaponValue(value: unknown): string | number {
     const cleanValue = value.includes("::")
       ? (value.split("::").pop() ?? value)
       : value;
-    const normalizedValue = cleanValue.trim().toLowerCase();
+    const normalizedValue = cleanValue.trim().toLowerCase().replace(/[\s_-]+/g, " ");
     const featureMatch = FEATURE_TRANSLATIONS.find((item) => normalizedValue.includes(item.includes));
     if (featureMatch) return featureMatch.label;
-    return VALUE_TRANSLATIONS[cleanValue] ?? cleanValue;
+    return VALUE_TRANSLATIONS[cleanValue] ?? cleanValue.replace(/([a-z])([A-Z])/g, "$1 $2");
   }
   if (typeof value === "number") return value;
   return "-";
@@ -129,7 +142,7 @@ export function getWeaponProfileTags(weapon: Arma) {
     tags.add("precisa");
   }
   if (weapon.adsStats && Object.keys(weapon.adsStats).length > 0) {
-    tags.add("tiene ADS");
+    tags.add("tiene mira");
   }
   if (String(stats?.wallPenetration ?? "").toLowerCase().includes("high")) {
     tags.add("buena penetración");
@@ -140,6 +153,37 @@ export function getWeaponProfileTags(weapon: Arma) {
 
 export function hasSufficientWeaponSample(stats?: RegionWeaponStats) {
   return (stats?.rounds_equipped ?? 0) >= 10 || (stats?.kills ?? 0) >= 10;
+}
+
+export function calculateGlobalWeaponHeadshotPct(
+  stats?: Pick<RegionWeaponStats, "headshots" | "bodyshots" | "legshots" | "headshot_pct">,
+) {
+  const sample = getWeaponHeadshotSample(stats);
+  return sample && sample.impacts > 0
+    ? (sample.headshots * 100) / sample.impacts
+    : undefined;
+}
+
+export function getWeaponHeadshotSample(
+  stats?: Pick<RegionWeaponStats, "headshots" | "bodyshots" | "legshots" | "headshot_pct">,
+) {
+  const headshots = Number(stats?.headshots ?? 0);
+  const bodyshots = Number(stats?.bodyshots ?? 0);
+  const legshots = Number(stats?.legshots ?? 0);
+  const impacts = headshots + bodyshots + legshots;
+  const hasStoredDistribution = stats?.bodyshots != null || stats?.legshots != null;
+  if (hasStoredDistribution && impacts > 0) {
+    return { headshots, impacts };
+  }
+
+  // Los agregados regionales históricos guardan headshots y el porcentaje,
+  // pero no bodyshots/legshots. Recuperamos el denominador original para
+  // poder combinar regiones con ponderación real por impactos.
+  const storedPct = Number(stats?.headshot_pct ?? 0);
+  if (headshots > 0 && storedPct > 0 && storedPct <= 100) {
+    return { headshots, impacts: (headshots * 100) / storedPct };
+  }
+  return undefined;
 }
 
 export function buildWeaponProfileSummary(weapon: EnrichedWeapon) {
@@ -157,7 +201,7 @@ export function buildWeaponProfileSummary(weapon: EnrichedWeapon) {
   if (tags.has("alta cadencia")) fragments.push("buen rendimiento en duelos sostenidos");
   if (tags.has("precisa")) fragments.push("premia disparos controlados");
   if (tags.has("buena penetración")) fragments.push("puede castigar a través de superficies");
-  if (tags.has("tiene ADS")) fragments.push("ofrece utilidad a media y larga distancia con ADS");
+  if (tags.has("tiene mira")) fragments.push("ofrece utilidad a media y larga distancia al apuntar con mira");
 
   if (fragments.length === 0) {
     return "Arma versátil del arsenal; revisa sus estadísticas base y daño por distancia para contextualizar su uso.";

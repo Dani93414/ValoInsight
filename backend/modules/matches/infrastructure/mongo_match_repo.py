@@ -19,15 +19,36 @@ def list_recent(limit: int = 20) -> list[dict[str, Any]]:
 
 def list_training_matches(limit: int = 10000) -> list[dict[str, Any]]:
     """Return ranked matches with round economy for offline model training."""
+    if limit <= 0:
+        return []
     cursor = (
         matches_collection.find(
-            {"matchInfo.isRanked": True, "roundResults.playerStats.economy": {"$exists": True}},
+            {"matchInfo.isRanked": True},
             {"_id": 0},
         )
         .sort("matchInfo.gameStartMillis", -1)
-        .limit(limit)
     )
-    return list(cursor)
+    # Some Mongo-compatible providers do not resolve $exists reliably through
+    # two nested arrays (roundResults -> playerStats). Filter the already
+    # bounded ranked corpus in Python so valid economy matches are not silently
+    # excluded from training.
+    matches: list[dict[str, Any]] = []
+    for match in cursor:
+        if _has_round_economy(match):
+            matches.append(match)
+            if len(matches) >= limit:
+                break
+    return matches
+
+
+def _has_round_economy(match: dict[str, Any]) -> bool:
+    return any(
+        isinstance(stat.get("economy"), dict) and bool(stat.get("economy"))
+        for round_obj in match.get("roundResults") or []
+        if isinstance(round_obj, dict)
+        for stat in round_obj.get("playerStats") or []
+        if isinstance(stat, dict)
+    )
 
 
 def find_by_id(match_id: str) -> Optional[dict[str, Any]]:

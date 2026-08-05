@@ -91,9 +91,10 @@ def _credits_summary(values: list[float]) -> dict[str, float | int]:
 def _observed_prebuy_credits(economy: dict[str, Any] | None) -> float | None:
     if not isinstance(economy, dict):
         return None
-    if "remaining" not in economy or "spent" not in economy:
-        return None
-    return _number(economy.get("remaining")) + _number(economy.get("spent"))
+    for key in ("creditsBeforeBuy", "credits_before_buy"):
+        if economy.get(key) is not None:
+            return _number(economy.get(key))
+    return None
 
 
 def _team_observed_prebuy(players: list[dict[str, Any]], economy_by_player: dict[str, dict]) -> float | None:
@@ -359,7 +360,7 @@ def extract_match_round_states(match: dict) -> list[dict]:
             team_id = player_team.get(puuid)
             economy = stat.get("economy")
             if team_id in stats_by_team and isinstance(economy, dict):
-                stats_by_team[team_id].append(economy)
+                stats_by_team[team_id].append({**economy, "_puuid": puuid})
                 economy_by_player[puuid] = economy
 
         # Even unusable rounds must advance score/streak context for later rows.
@@ -390,10 +391,7 @@ def extract_match_round_states(match: dict) -> list[dict]:
             team_id: list(round_player_credits[team_id].values())
             for team_id in team_ids
         }
-        free_light_exceptions = {
-            puuid: infer_pistol_free_light_armor_from_economy(round_number, economy)
-            for puuid, economy in economy_by_player.items()
-        }
+        free_light_exceptions: dict[str, bool] = {}
         for team_id in team_ids:
             enemy_id = next(value for value in team_ids if value != team_id)
             tiers = [normalize_rank_tier(player.get("competitiveTier")) for player in team_players[team_id]]
@@ -475,6 +473,35 @@ def extract_match_round_states(match: dict) -> list[dict]:
             enemy_credits = _credits_summary(list(enemy_player_credit_estimates.values()))
             own_credits["estimated_credits_before_buy"] = team_selected_prebuy
             enemy_credits["estimated_credits_before_buy"] = enemy_selected_prebuy
+            team_economies_derived = [
+                {
+                    **economy,
+                    "totalOutlay": max(
+                        0.0,
+                        _number(team_player_credit_estimates.get(str(economy.get("_puuid"))))
+                        - _number(economy.get("remaining")),
+                    ),
+                }
+                for economy in stats_by_team[team_id]
+            ]
+            enemy_economies_derived = [
+                {
+                    **economy,
+                    "totalOutlay": max(
+                        0.0,
+                        _number(enemy_player_credit_estimates.get(str(economy.get("_puuid"))))
+                        - _number(economy.get("remaining")),
+                    ),
+                }
+                for economy in stats_by_team[enemy_id]
+            ]
+            if not free_light_exceptions:
+                for economy in team_economies_derived + enemy_economies_derived:
+                    puuid = str(economy.get("_puuid") or "")
+                    if puuid:
+                        free_light_exceptions[puuid] = infer_pistol_free_light_armor_from_economy(
+                            round_number, economy,
+                        )
             team_free_light_exceptions = {
                 puuid: bool(free_light_exceptions.get(puuid))
                 for puuid in team_player_credit_estimates
@@ -496,7 +523,7 @@ def extract_match_round_states(match: dict) -> list[dict]:
                 prefix="enemy",
             )
             team_labels = classify_team_economy_labels(
-                stats_by_team[team_id],
+                team_economies_derived,
                 round_number=round_number,
                 team_prebuy_credits=team_selected_prebuy,
                 previous_round_context={"won": streaks[team_id]["previous_won"]},
@@ -504,7 +531,7 @@ def extract_match_round_states(match: dict) -> list[dict]:
                 is_overtime=round_number >= 25,
             )
             enemy_labels = classify_team_economy_labels(
-                stats_by_team[enemy_id],
+                enemy_economies_derived,
                 round_number=round_number,
                 team_prebuy_credits=enemy_selected_prebuy,
                 previous_round_context={"won": streaks[enemy_id]["previous_won"]},
@@ -590,7 +617,7 @@ def extract_match_round_states(match: dict) -> list[dict]:
                 **team_utility,
                 **enemy_utility,
                 **build_utility_diff_features(team_utility, enemy_utility),
-                **observed_action_features(stats_by_team[team_id]),
+                **observed_action_features(team_economies_derived),
             }
             rows.append(row)
         _update_player_credit_estimates(

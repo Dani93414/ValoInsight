@@ -17,8 +17,63 @@ def _name(player: dict) -> str:
     return str((player.get("weapon") or {}).get("displayName") or "").lower()
 
 
+def build_round_win_features(base: dict, players: list[dict], context: dict) -> dict[str, Any]:
+    advanced = context.get("advanced_context") or {}
+    enemy = advanced.get("enemy_economy") or {}
+    enemy_projection = enemy.get("enemy_projected_buy") or {}
+    map_context = advanced.get("map_context") or {}
+    names = [_name(player) for player in players]
+    armor_levels = [
+        str((player.get("armor") or {}).get("armor_level") or "").lower()
+        for player in players
+    ]
+    utility_types = sorted({
+        str(tactical)
+        for player in players
+        for ability in player.get("abilities") or []
+        for tactical in ability.get("tactical_types") or []
+        if tactical
+    })
+    ultimates = advanced.get("ultimates") or {}
+    return {
+        "team_weapon_value": _num(base.get("weapon_value")), "team_armor_value": _num(base.get("armor_value")),
+        "team_utility_value": _num(base.get("utility_value")),
+        "enemy_projected_weapon_value": _num(enemy_projection.get("projected_weapon_value")),
+        "enemy_projected_armor_value": _num(enemy_projection.get("projected_armor_value")),
+        "enemy_projected_utility_value": _num(enemy_projection.get("projected_utility_value")),
+        "rifle_count": sum(weapon_role(_name(p)) == "rifle" for p in players),
+        "operator_count": sum(_name(p) == "operator" for p in players),
+        "smg_count": sum(weapon_role(_name(p)) == "smg" for p in players),
+        "sidearm_count": sum(weapon_role(_name(p)) == "sidearm" for p in players),
+        "heavy_weapon_count": sum(weapon_role(_name(p)) == "heavy" for p in players),
+        "classic_count": sum(name in {"", "classic"} for name in names),
+        "shorty_count": sum(name == "shorty" for name in names),
+        "frenzy_count": sum(name == "frenzy" for name in names),
+        "ghost_count": sum(name == "ghost" for name in names),
+        "sheriff_count": sum(name == "sheriff" for name in names),
+        "heavy_shield_count": sum(level == "heavy" for level in armor_levels),
+        "regen_shield_count": sum(level == "regen" for level in armor_levels),
+        "light_shield_count": sum(level == "light" for level in armor_levels),
+        "ultimate_ready_count": sum(
+            bool((ultimates.get(str(player.get("puuid"))) or {}).get("ultimate_ready"))
+            for player in players
+        ),
+        "map": map_context.get("map_name"), "side": context.get("side"),
+        "round_number": context.get("round_number"), "score_diff": context.get("score_diff"),
+        "loss_streak": context.get("loss_streak"), "team_credits_total": context.get("team_estimated_credits_before_buy"),
+        "team_credits_median": context.get("team_player_credits_median"),
+        "enemy_credits_total": context.get("enemy_estimated_credits_before_buy"),
+        "enemy_credits_median": enemy.get("enemy_median_credits"),
+        "agent_roles": context.get("team_role_signature") or "unknown",
+        "utility_types_available": ",".join(utility_types) or "unknown",
+        "player_weapon_fit_scores": context.get("team_avg_weapon_fit_score", .5),
+        "enemy_buy_class": enemy.get("enemy_buy_recommendation"),
+    }
+
+
 def apply_contextual_adjustments(base: dict, players: list[dict], context: dict,
-                                 model: RoundWinLoadoutModel | None = None) -> dict:
+                                 model: RoundWinLoadoutModel | None = None,
+                                 prediction: dict[str, Any] | None = None) -> dict:
     advanced = context.get("advanced_context") or {}
     map_adjustment = site_adjustment = player_fit = enemy_adjustment = utility_adjustment = ultimate_adjustment = armor_adjustment = 0.0
     warnings: list[str] = []
@@ -72,13 +127,8 @@ def apply_contextual_adjustments(base: dict, players: list[dict], context: dict,
     player_fit = max(-.06, min(.06, player_fit))
 
     enemy = advanced.get("enemy_economy") or {}
-    enemy_projection = enemy.get("enemy_projected_buy") or {}
     enemy_buy = enemy.get("enemy_buy_recommendation")
-    heavy = sum(_name(player) in {"odin", "operator"} for player in players)
     weak = sum(_num(player.get("weapon_value")) < 1600 for player in players)
-    if enemy_buy in {"ENEMY_ECO", "ENEMY_HALF_BUY", "ENEMY_PISTOL"} and heavy:
-        enemy_adjustment -= .10 * heavy
-        warnings.append("context_enemy_low_buy_heavy_overbuy")
     if enemy_buy == "ENEMY_FULL_BUY" and weak:
         enemy_adjustment -= .055 * weak
         warnings.append("context_enemy_full_buy_underpowered")
@@ -125,28 +175,33 @@ def apply_contextual_adjustments(base: dict, players: list[dict], context: dict,
             utility_adjustment -= .025
     utility_adjustment = max(-.05, min(.04, utility_adjustment))
 
-    features = {
-        "team_weapon_value": _num(base.get("weapon_value")), "team_armor_value": _num(base.get("armor_value")),
-        "team_utility_value": _num(base.get("utility_value")),
-        "enemy_projected_weapon_value": _num(enemy_projection.get("projected_weapon_value")),
-        "enemy_projected_armor_value": _num(enemy_projection.get("projected_armor_value")),
-        "enemy_projected_utility_value": _num(enemy_projection.get("projected_utility_value")),
-        "rifle_count": sum(weapon_role(_name(p)) == "rifle" for p in players),
-        "operator_count": sum(_name(p) == "operator" for p in players),
-        "smg_count": sum(weapon_role(_name(p)) == "smg" for p in players),
-        "sidearm_count": sum(weapon_role(_name(p)) == "sidearm" for p in players),
-        "heavy_weapon_count": sum(weapon_role(_name(p)) == "heavy" for p in players),
-        "map": map_context.get("map_name"), "side": context.get("side"),
-        "round_number": context.get("round_number"), "score_diff": context.get("score_diff"),
-        "loss_streak": context.get("loss_streak"), "team_credits_total": context.get("team_estimated_credits_before_buy"),
-        "team_credits_median": context.get("team_player_credits_median"),
-        "enemy_credits_total": context.get("enemy_estimated_credits_before_buy"),
-        "enemy_credits_median": enemy.get("enemy_median_credits"), "enemy_buy_class": enemy_buy,
-    }
-    prediction = (model or RoundWinLoadoutModel()).predict_round_win(features)
+    if prediction is None:
+        prediction = (model or RoundWinLoadoutModel()).predict_round_win(
+            build_round_win_features(base, players, context)
+        )
     ml_adjustment = 0.0
     if prediction.get("available") and prediction.get("round_win_probability") is not None:
-        ml_adjustment = max(-.10, min(.10, (_num(prediction["round_win_probability"]) - _num(base.get("round_win_probability"))) * .18))
+        # The temporal pistol holdout is calibrated but only weakly
+        # discriminative. Keep it as supporting evidence instead of allowing
+        # it to decide exact pistol purchases.
+        pistol = bool(context.get("is_pistol_round"))
+        ml_weight = .25 if pistol else .18
+        ml_cap = .035 if pistol else .10
+        reference_probability = (
+            _num(context.get("pistol_ml_probability_reference"))
+            if pistol and context.get("pistol_ml_probability_reference") is not None
+            else _num(base.get("round_win_probability"))
+        )
+        ml_adjustment = max(
+            -ml_cap,
+            min(
+                ml_cap,
+                (_num(prediction["round_win_probability"])
+                 - reference_probability) * ml_weight,
+            ),
+        )
+        if pistol:
+            warnings.append("pistol_ml_used_as_support_only")
     adjustment = max(-.35, min(.25, map_adjustment + site_adjustment + player_fit + enemy_adjustment + utility_adjustment + ultimate_adjustment + armor_adjustment + ml_adjustment))
     raw = _num(base.get("team_plan_value")) + adjustment
     result = dict(base)

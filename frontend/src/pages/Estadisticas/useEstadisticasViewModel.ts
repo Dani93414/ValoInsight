@@ -1721,6 +1721,7 @@ export function useEstadisticasViewModel(playerId: string | undefined) {
   return {
     // loading / data
     loading,
+    rankComparisonInitialLoading: rankComparisonLoading,
     rankComparisonLoading: rankComparisonLoading || rankComparisonFetching,
     dashboard,
     player,

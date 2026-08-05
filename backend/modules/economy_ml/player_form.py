@@ -29,6 +29,19 @@ def _damage(pstat: dict[str, Any]) -> int:
     return int(sum(float(item.get("damage") or 0) for item in pstat.get("damage") or []))
 
 
+def _died_in_round(match: dict[str, Any], puuid: str, round_number: int) -> bool:
+    for index, round_obj in enumerate(match.get("roundResults") or []):
+        if _display_round(round_obj.get("roundNum"), index) != round_number:
+            continue
+        return any(
+            str(kill.get("victim") or "") == str(puuid)
+            for stat in round_obj.get("playerStats") or []
+            for kill in stat.get("kills") or []
+            if isinstance(kill, dict)
+        )
+    return False
+
+
 def build_player_form(match: dict[str, Any], puuid: str, round_number: int) -> dict[str, Any]:
     previous = []
     for number in range(1, round_number):
@@ -40,7 +53,7 @@ def build_player_form(match: dict[str, Any], puuid: str, round_number: int) -> d
             "kills": kills,
             "damage": _damage(pstat),
             "score": int(pstat.get("score") or 0),
-            "death": int(any(kill.get("victim") == puuid for stat in (match.get("roundResults") or []) for kill in (stat.get("kills") or []))),
+            "death": int(_died_in_round(match, puuid, number)),
             "survived": 0,
         })
     last3 = previous[-3:]

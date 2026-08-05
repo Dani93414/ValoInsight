@@ -4,6 +4,32 @@ export function hideBrokenImage(event: SyntheticEvent<HTMLImageElement>) {
   event.currentTarget.style.display = "none";
 }
 
+export type ImageDerivative = "thumb" | "medium";
+
+export function getImageDerivative(
+  source: string | null | undefined,
+  derivative: ImageDerivative,
+) {
+  if (!source || !source.startsWith("/content/")) return source ?? "";
+  if (/\.(?:thumb|medium)\.webp(?:[?#].*)?$/i.test(source)) return source;
+  return source.replace(
+    /\.(?:png|jpe?g|webp|bmp|tiff?)(?=([?#].*)?$)/i,
+    `.${derivative}.webp`,
+  );
+}
+
+export function fallbackToOriginalImage(
+  event: SyntheticEvent<HTMLImageElement>,
+  originalSource: string,
+) {
+  const image = event.currentTarget;
+  if (image.src !== new URL(originalSource, window.location.href).href) {
+    image.src = originalSource;
+    return;
+  }
+  hideBrokenImage(event);
+}
+
 export function normalizeText(value: unknown) {
   return String(value ?? "")
     .toLowerCase()

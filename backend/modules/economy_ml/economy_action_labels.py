@@ -105,7 +105,11 @@ def classify_team_economy_labels(
 ) -> dict[str, Any]:
     action = classify_team_buy_action(economies, previous_round_context)
     target = normalize_target_loadout_case(action, round_number=round_number)
-    team_spent = sum(_number(economy.get("spent")) for economy in economies)
+    team_spent = sum(_number(
+        economy.get("totalOutlay")
+        if economy.get("totalOutlay") is not None
+        else economy.get("derivedSpend")
+    ) for economy in economies)
     team_loadout = sum(_number(economy.get("loadoutValue")) for economy in economies)
     cashflow = classify_cashflow_case(
         team_spent=team_spent,
@@ -119,6 +123,7 @@ def classify_team_economy_labels(
         "real_buy_action": action,
         "target_loadout_case": target,
         "cashflow_case": cashflow,
-        "team_spent_observed": team_spent,
+        "team_spent_derived": team_spent,
+        "team_spent_observed": None,
         "team_loadout_observed": team_loadout,
     }

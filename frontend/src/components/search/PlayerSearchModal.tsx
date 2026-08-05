@@ -13,11 +13,14 @@ import {
   type UserPlayer,
 } from "../../api/userApi";
 import { useAuth } from "../../context/AuthContext";
+import LoadingModal from "../ui/LoadingModal";
 import {
   getRankNameFromTier,
   applyUnrankedRankIconFallback,
   resolveCompetitiveTierIcon,
 } from "../../utils/rankUtils";
+import { canSearchPlayer, PLAYER_SEARCH_DEBOUNCE_MS } from "../../utils/playerSearch";
+import "../auth/AuthModal.css";
 import "./PlayerSearchModal.css";
 
 type SearchResult = {
@@ -115,14 +118,14 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
       setIsLoading(false);
       return;
     }
-    if (trimmedGameName.length < 3 && trimmedTagLine.length < 3) {
+    if (!canSearchPlayer(trimmedGameName, trimmedTagLine)) {
       setResults([]);
       setIsLoading(false);
       return;
     }
 
-    setIsLoading(true);
     const timeoutId = window.setTimeout(async () => {
+      setIsLoading(true);
       try {
         const response = await searchPlayers(trimmedGameName, trimmedTagLine);
         if (requestId === requestSequenceRef.current) {
@@ -137,7 +140,7 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
           setIsLoading(false);
         }
       }
-    }, 350);
+    }, PLAYER_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timeoutId);
   }, [gameName, isOpen, tagLine]);
@@ -200,7 +203,7 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
   const trimmedGameName = gameName.trim();
   const trimmedTagLine = tagLine.trim();
   const hasSearch = Boolean(trimmedGameName || trimmedTagLine);
-  const canSearch = trimmedGameName.length >= 3 || trimmedTagLine.length >= 3;
+  const canSearch = canSearchPlayer(trimmedGameName, trimmedTagLine);
 
   const openPlayer = (playerId: string) => {
     if (isLoggedIn) {
@@ -210,6 +213,11 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
     }
     navigate(`/estadisticas/${playerId}`);
     onClose();
+  };
+
+  const handleSubmitSearch = () => {
+    const firstResult = results[0];
+    if (firstResult) openPlayer(firstResult.id);
   };
 
   const handleToggleFavorite = async (playerId: string) => {
@@ -374,7 +382,13 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
           </div>
         </div>
 
-        <div className="topbar-player-search-modal__grid">
+        <form
+          className="topbar-player-search-modal__grid"
+          onSubmit={(event) => {
+            event.preventDefault();
+            handleSubmitSearch();
+          }}
+        >
           <label className="home-field">
             <span>gameName</span>
             <div className="home-field__control">
@@ -398,7 +412,12 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
               />
             </div>
           </label>
-        </div>
+
+          <button className="home-search-button" type="submit">
+            <Search size={18} aria-hidden="true" />
+            Buscar
+          </button>
+        </form>
 
         <div className="home-search-tabs" role="tablist" aria-label="Apartados del buscador">
           {searchSections.map((section) => {
@@ -425,10 +444,7 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
         {activeSearchSection === "search" ? (
           <>
             {isLoading && (
-              <div className="home-search-loading">
-                <span className="home-search-spinner" />
-                Buscando jugador...
-              </div>
+              <LoadingModal placement="section" />
             )}
             {!isLoading && !canSearch && hasSearch && (
               <div className="home-search-coming-soon">Mínimo escribe 3 letras</div>
@@ -438,10 +454,7 @@ export function PlayerSearchModal({ isOpen, onClose }: Props) {
         ) : (
           <>
             {loadingUserSection === activeSearchSection && (
-              <div className="home-search-loading">
-                <span className="home-search-spinner" />
-                Cargando datos...
-              </div>
+              <LoadingModal placement="section" />
             )}
 
             {loadingUserSection !== activeSearchSection &&

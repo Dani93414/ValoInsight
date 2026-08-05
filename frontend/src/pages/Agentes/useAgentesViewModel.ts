@@ -4,7 +4,7 @@ import {
   useAgentes,
   useGlobalAgentStats,
   usePlayerDashboard,
-  useRegions,
+  useRegionOptions,
 } from "../../api/hooks";
 import { useAuth } from "../../context/AuthContext";
 import type { Agente, Role } from "../../types/agents";
@@ -333,7 +333,7 @@ function buildFilterSummary(
 export function useAgentesViewModel() {
   const auth = useAuth();
   const { data: rawAgentes, isLoading: agentesLoading, isError, error } = useAgentes();
-  const { data: regions, isLoading: regionsLoading } = useRegions();
+  const { data: regions, isLoading: regionsLoading } = useRegionOptions();
   const personalDashboardQuery = usePlayerDashboard(auth.user?.puuid, undefined);
   const location = useLocation();
   const navigate = useNavigate();
@@ -351,15 +351,16 @@ export function useAgentesViewModel() {
   const [actFilter, setActFilter] = useState("all");
   const [compareAgents, setCompareAgents] = useState<EnrichedAgent[]>([]);
 
+  const regionOptions = useMemo(() => buildRegionOptions(regions), [regions]);
+  const effectiveRegion = selectedRegion || regionOptions[0]?.value || "";
   const globalAgentStatsQuery = useGlobalAgentStats({
-    region: selectedRegion,
+    region: effectiveRegion,
     rank: rankFilter,
     map: mapFilter,
     act: actFilter,
-  });
+  }, Boolean(effectiveRegion));
 
   const baseAgents = useMemo(() => normalizeArrayResponse<Agente>(rawAgentes), [rawAgentes]);
-  const regionOptions = useMemo(() => buildRegionOptions(regions), [regions]);
 
   useEffect(() => {
     if (regionTouchedRef.current || regionOptions.length === 0) return;

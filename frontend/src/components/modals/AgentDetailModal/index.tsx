@@ -17,6 +17,7 @@ import {
   Cell,
 } from "recharts";
 import { useLocation } from "react-router-dom";
+import LoadingModal from "../../ui/LoadingModal";
 import {
   formatNumber,
   formatPercent,
@@ -182,7 +183,7 @@ function AcsTrend({
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="empty-chart">Cargando gráfico...</div>
+            <LoadingModal placement="section" />
           )
         ) : (
           <div className="empty-chart">Sin suficientes partidas.</div>
@@ -253,7 +254,7 @@ function TacticalProfile({
             </RadarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="empty-chart">Cargando gráfico...</div>
+          <LoadingModal placement="section" />
         )}
       </div>
     </section>
@@ -323,7 +324,7 @@ function Multikills({
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="empty-chart">Cargando gráfico...</div>
+          <LoadingModal placement="section" />
         )}
       </div>
     </section>
@@ -424,22 +425,7 @@ export default function AgentDetailModal({
   } = useAgentDetailStats({ agentId, analyticsList, agentNameMap });
 
   if (loading) {
-    return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div
-          className="modal-panel agent-modal-panel"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button className="modal-close" onClick={onClose} aria-label="Cerrar modal">
-            ×
-          </button>
-          <div className="loading-card">
-            <div className="loading-spinner" />
-            <h2>Cargando agente</h2>
-          </div>
-        </div>
-      </div>
-    );
+    return <LoadingModal placement="overlay" />;
   }
 
   return (
@@ -486,4 +472,3 @@ export default function AgentDetailModal({
     </div>
   );
 }
-

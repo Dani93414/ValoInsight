@@ -29,6 +29,7 @@ class PlayerRoundEconomyLedger:
     credits_before_buy_observed: float | None
     credits_before_buy_estimated: float
     spent: float
+    spent_source: str
     remaining_after_buy: float | None
     loadout_value: float | None
     kills: int
@@ -148,9 +149,12 @@ def _stats_by_player(round_obj: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _observed_prebuy(economy: dict[str, Any] | None) -> float | None:
-    if not isinstance(economy, dict) or "remaining" not in economy or "spent" not in economy:
+    if not isinstance(economy, dict):
         return None
-    return clamp_credits(_number(economy.get("remaining")) + _number(economy.get("spent")))
+    for key in ("creditsBeforeBuy", "credits_before_buy"):
+        if economy.get(key) is not None:
+            return clamp_credits(_number(economy.get(key)))
+    return None
 
 
 def _next_observed_prebuy(rounds: list[dict], round_index: int, puuid: str) -> float | None:
@@ -278,9 +282,9 @@ def _build_player(
         estimated_before = 0.0
     estimated_before = clamp_credits(estimated_before)
 
-    spent = _number((economy or {}).get("spent"))
     remaining = (economy or {}).get("remaining")
-    remaining_after_buy = _number(remaining) if remaining is not None else max(0.0, estimated_before - spent)
+    remaining_after_buy = _number(remaining) if remaining is not None else estimated_before
+    spent = max(0.0, estimated_before - remaining_after_buy) if remaining is not None else 0.0
     loadout_value = (economy or {}).get("loadoutValue")
     kills, kills_available = _round_kills(stat)
     survived = infer_player_survived_round(round_obj, puuid)
@@ -323,6 +327,8 @@ def _build_player(
         warnings.append("kills_not_available")
     if infer_pistol_free_light_armor_from_economy(round_number, economy or {}):
         flags.append("free_light_armor_exception")
+    if isinstance(economy, dict) and economy.get("spent") is not None:
+        flags.append("legacy_spent_ignored")
     if round_number in {1, 13}:
         flags.append("is_half_reset_round")
     if round_number >= 25:
@@ -338,6 +344,7 @@ def _build_player(
         credits_before_buy_observed=observed_before,
         credits_before_buy_estimated=estimated_before,
         spent=spent,
+        spent_source="derived_prebuy_minus_remaining",
         remaining_after_buy=remaining_after_buy if remaining is not None else None,
         loadout_value=_number(loadout_value) if loadout_value is not None else None,
         kills=kills,

@@ -795,6 +795,22 @@ body {
   gap: 1.1rem;
 }
 
+.content-load-more {
+  display: flex;
+  min-height: 1px;
+  justify-content: center;
+  padding: 1.25rem 0 0;
+}
+
+.content-load-more button {
+  border: 1px solid rgba(255, 70, 85, 0.55);
+  border-radius: 999px;
+  background: rgba(15, 20, 28, 0.92);
+  color: #f7f7f8;
+  cursor: pointer;
+  padding: 0.65rem 1.1rem;
+}
+
 .content-card {
   position: relative;
   min-height: 160px;
@@ -2833,6 +2849,40 @@ body {
   min-height: 42px;
 }
 
+.actos-catalog-search {
+  position: relative;
+  flex: 1 1 280px;
+  min-width: 240px;
+}
+
+.actos-catalog-search .content-search-wrap {
+  width: 100%;
+}
+
+.actos-search-menu {
+  min-width: min(100%, 360px);
+}
+
+.actos-search-symbol {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid rgba(255, 70, 85, 0.38);
+  border-radius: 7px;
+  background: linear-gradient(145deg, rgba(255, 70, 85, 0.18), rgba(255, 255, 255, 0.035));
+  color: #ff7a86;
+  font-size: 1rem;
+  font-weight: 950;
+}
+
+.actos-search-empty {
+  padding: 1rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
 .actos-current-button {
   min-height: 42px;
   padding: 0 0.95rem;
@@ -2949,6 +2999,115 @@ body {
   grid-column: 1 / -1;
   width: 100%;
   overflow: visible;
+}
+
+.actos-hierarchy {
+  display: grid;
+  gap: 1.25rem;
+  min-height: 360px;
+  padding: clamp(1.2rem, 3vw, 2.25rem);
+  border: 1px solid rgba(255, 70, 85, 0.38);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255, 70, 85, 0.14), transparent 34%),
+    linear-gradient(145deg, rgba(24, 29, 38, 0.98), rgba(9, 12, 18, 0.98));
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.3);
+}
+
+.actos-hierarchy-header {
+  padding-bottom: 1.2rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.actos-hierarchy-header span,
+.actos-selected-act > header span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.actos-hierarchy-header h2 {
+  margin: 0;
+  color: #fff;
+  font-size: clamp(2.2rem, 6vw, 4.8rem);
+  font-weight: 950;
+  letter-spacing: -0.035em;
+  text-transform: uppercase;
+}
+
+.actos-act-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.actos-act-choices button,
+.actos-selected-act > header {
+  min-height: 112px;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid rgba(255, 70, 85, 0.3);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(255, 70, 85, 0.12), rgba(255, 255, 255, 0.035));
+  color: #fff;
+}
+
+.actos-act-choices button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  transition: border-color var(--transition-fast), transform var(--transition-fast), background var(--transition-fast);
+}
+
+.actos-act-choices button:hover,
+.actos-act-choices button:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(255, 70, 85, 0.7);
+  background: rgba(255, 70, 85, 0.18);
+  outline: none;
+}
+
+.actos-act-choices button span,
+.actos-selected-act h3 {
+  margin: 0;
+  font-size: clamp(1.15rem, 2vw, 1.55rem);
+  font-weight: 950;
+  letter-spacing: 0.04em;
+}
+
+.actos-act-choices button small {
+  padding: 0.3rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 70, 85, 0.2);
+  color: #ff9da6;
+  font-size: 0.62rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.actos-selected-act {
+  display: grid;
+  gap: 1rem;
+}
+
+.actos-selected-act > header {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.actos-selected-act .actos-leaderboard-detail {
+  margin-bottom: 0;
+}
+
+@media (max-width: 720px) {
+  .actos-act-choices { grid-template-columns: 1fr; }
+  .actos-hierarchy { padding: 1rem; border-radius: 14px; }
 }
 
 .actos-leaderboard-detail {

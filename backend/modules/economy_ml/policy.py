@@ -8,6 +8,7 @@ from .action_profiles import minimum_action_credits, simulate_action_features
 from .buy_classifier import BUY_ACTIONS
 from .config import MIN_PROPENSITY
 from .economy_rules import is_pistol_round, pistol_action_guardrail
+from .economy_cases import classify_economy_case
 from .model_registry import load_model_candidates
 from .plan_allocator import allocate_player_loadouts
 from .schemas import MODEL_FEATURES, PROPENSITY_FEATURES
@@ -15,6 +16,10 @@ from .team_plan import evaluate_team_plan_from_action
 
 MIN_RECOMMENDATION_MARGIN = 0.04
 PISTOL_SHERIFF_MIN_MARGIN = 0.08
+DEFAULT_CASE_MARGINS = {
+    "normal": 0.04, "eco": 0.08, "pistol": 0.10, "bonus": 0.08,
+    "stabilization": 0.06, "match_point_or_overtime": 0.12,
+}
 
 
 def recommendation_status(num_viable_alternatives: int, chosen_eq_real: bool, delta_team_plan_value: float) -> str:
@@ -98,7 +103,40 @@ def _predict_probability(bundle: dict, scenario: dict, model_key: str = "match_w
     calibrator = model_bundle.get("calibrator")
     if calibrator is None:
         return raw
-    return float(calibrator.predict_proba([[raw]])[0, 1])
+    if hasattr(calibrator, "predict_proba"):
+        return float(calibrator.predict_proba([[raw]])[0, 1])
+    return float(calibrator.predict([raw])[0])
+
+
+def _bundle_quality(bundle: dict) -> tuple[bool, float]:
+    metrics = bundle.get("metrics") or {}
+    primary = metrics.get("match_win_model") or metrics
+    test_matches = int(bundle.get("test_matches") or bundle.get("dataset_quality", {}).get("test_matches") or 0)
+    logloss = primary.get("log_loss")
+    brier = primary.get("brier_score")
+    ece = primary.get("expected_calibration_error")
+    if test_matches and test_matches < 5:
+        return False, float("-inf")
+    if any(value is None for value in (logloss, brier, ece)):
+        return True, -1.0
+    return True, -(float(logloss) + float(brier) + float(ece))
+
+
+def _policy_gate(bundle: dict) -> tuple[bool, str | None]:
+    """Keep predictive models from becoming recommenders without OPE evidence."""
+    if bundle.get("deployment_policy_enabled") is False:
+        return False, "El modelo esta desplegado solo para prediccion; se mantienen las reglas."
+    if bundle.get("experimental_policy_override") is True:
+        return True, None
+    evaluation = (bundle.get("metrics") or {}).get("policy_evaluation")
+    if not evaluation:
+        # Small synthetic/test bundles and old rule-only integrations do not
+        # claim causal validation; their local confidence guardrails still run.
+        return True, None
+    interval = evaluation.get("improvement_confidence_interval_95") or []
+    if len(interval) != 2 or float(interval[0]) <= 0:
+        return False, "La politica ML no mejora al solver con confianza estadistica; se mantienen las reglas."
+    return True, None
 
 
 def _utility_explanations(state: dict) -> list[str]:
@@ -128,6 +166,7 @@ def _recommend_with_bundle(
     match: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     alternatives = []
+    action_profiles = bundle.get("action_profiles") or {}
     for action in actions:
         viable, reason, support = _availability(action, state, bundle)
         probability = None
@@ -136,12 +175,32 @@ def _recommend_with_bundle(
         fullbuy_probability = None
         if viable:
             scenario = {feature: state.get(feature) for feature in MODEL_FEATURES}
-            scenario.update(simulate_action_features(state, action))
+            learned_profile = action_profiles.get(action)
+            scenario.update(simulate_action_features(state, action, learned_profile))
             scenario["buy_action"] = action
-            probability = _predict_probability(bundle, scenario, "match_win_model")
+            scenario.update(classify_economy_case(state, action))
+            policy_model_key = (
+                "policy_match_win_model"
+                if (
+                    "policy_match_win_model" in (bundle.get("models") or {})
+                    and (
+                        bool((bundle.get("policy_config") or {}).get("selected"))
+                        or bundle.get("experimental_policy_override") is True
+                    )
+                    and bundle.get("deployment_policy_enabled", True) is not False
+                )
+                else "match_win_model"
+            )
+            probability = _predict_probability(bundle, scenario, policy_model_key)
             round_probability = _predict_probability(bundle, scenario, "round_win_model")
             fullbuy_probability = _predict_probability(bundle, scenario, "fullbuy_next_round_model")
-            team_plan = evaluate_team_plan_from_action(state, action, probability)
+            team_plan = (
+                evaluate_team_plan_from_action(
+                    state, action, probability, learned_profile=learned_profile,
+                )
+                if learned_profile is not None
+                else evaluate_team_plan_from_action(state, action, probability)
+            )
             if round_probability is not None:
                 team_plan["predicted_round_win"] = round_probability
             if fullbuy_probability is not None:
@@ -229,22 +288,52 @@ def _recommend_with_bundle(
     )
     credit_quality_factor, credit_quality_reason = _credit_quality_adjustment(state)
     confidence = min(1.0, margin * 4) * support_factor * credit_quality_factor
+    policy_config = bundle.get("policy_config") or {}
+    case_margins = policy_config.get("case_margins") or DEFAULT_CASE_MARGINS
+    plan_context = str(best_plan.get("plan_value_context") or "normal")
+    required_margin = float(case_margins.get(plan_context, MIN_RECOMMENDATION_MARGIN))
+    disabled_case = bool(state.get("is_overtime")) or (
+        plan_context in set(policy_config.get("disabled_cases") or [])
+    )
+    allowed_cases = policy_config.get("allowed_cases")
+    allowed_actions = policy_config.get("allowed_actions")
+    outside_selected_scope = (
+        allowed_cases is not None and plan_context not in set(allowed_cases)
+    ) or (
+        allowed_actions is not None and best["action"] not in set(allowed_actions)
+    )
     if credit_quality_reason is not None and credit_quality_factor < 0.7:
         strength = "low"
         low_confidence_reason = credit_quality_reason
-    elif margin < MIN_RECOMMENDATION_MARGIN:
+    elif disabled_case or outside_selected_scope:
         strength = "low"
-        low_confidence_reason = "Margen insuficiente entre alternativas"
+        low_confidence_reason = "La politica ML se abstiene en esta casuistica economica."
+    elif margin < required_margin:
+        strength = "low"
+        low_confidence_reason = (
+            f"Margen insuficiente entre alternativas ({margin:.3f} < {required_margin:.3f})"
+        )
     elif confidence >= 0.6:
         strength = "high"
         low_confidence_reason = None
     else:
         strength = "medium"
         low_confidence_reason = None
+    policy_gate_passed, policy_gate_reason = _policy_gate(bundle)
+    actionable = strength != "low" and credit_quality_factor >= 0.7 and policy_gate_passed
+    if not actionable:
+        status = "abstained_low_confidence"
     return {
-        "available": True, "recommended_action": best["action"], "model_scope": scope,
+        "available": True, "guidance_enabled": actionable,
+        "experimental_policy": bool(bundle.get("experimental_policy_override")),
+        "policy_validation_passed": not bool(bundle.get("experimental_policy_override")),
+        "policy_gate_passed": policy_gate_passed,
+        "recommended_action": best["action"],
+        "candidate_action": best["action"], "model_scope": scope,
         "confidence": float(confidence), "confidence_kind": "support_adjusted_margin",
         "recommendation_margin": float(margin),
+        "required_recommendation_margin": required_margin,
+        "policy_case": plan_context,
         "support_factor": float(support_factor),
         "credit_quality_factor": float(credit_quality_factor),
         "recommendation_status": status,
@@ -255,7 +344,7 @@ def _recommend_with_bundle(
         "support_count_best_action": best["historical_support"],
         "credit_estimate_quality": state.get("credit_estimate_quality") or state.get("team_credit_estimate_quality"),
         "recommendation_strength": strength,
-        "low_confidence_reason": low_confidence_reason,
+        "low_confidence_reason": low_confidence_reason or policy_gate_reason,
         "estimated_match_win_probability": best["estimated_match_win_probability"],
         "team_plan": best["team_plan"],
         "alternatives": alternatives,
@@ -272,7 +361,7 @@ def _recommend_with_bundle(
         "limitations": [
             "Modelo observacional: no prueba causalidad.",
             "Compra historica de habilidades no observable salvo dato explicito verificable.",
-            *( ["La estimacion de creditos de esta ronda no es exacta; revisar spent/loadout/reconciliacion."] if credit_quality_reason else [] ),
+            *( ["La estimación de créditos de esta ronda no es exacta; revisa la reconstrucción de créditos y equipamiento."] if credit_quality_reason else [] ),
         ],
     }
 
@@ -288,7 +377,10 @@ def recommend_economy_action(
     if not candidates:
         return {"available": False, "reason": "No hay modelo compatible entrenado todavía"}
     actions = available_actions or [action for action in BUY_ACTIONS if action != "UNKNOWN"]
-    for bundle, scope in candidates:
+    ranked = sorted(candidates, key=lambda item: _bundle_quality(item[0])[1], reverse=True)
+    for bundle, scope in ranked:
+        if not _bundle_quality(bundle)[0]:
+            continue
         recommendation = _recommend_with_bundle(state, actions, bundle, scope, match=match)
         if recommendation:
             return recommendation

@@ -123,7 +123,14 @@ def infer_pistol_free_light_armor_from_economy(
     if not isinstance(economy, dict) or not is_light_armor_item(economy.get("armor")):
         return False
 
-    spent = _number(economy.get("spent"))
+    spent_value = (
+        economy.get("totalOutlay")
+        if economy.get("totalOutlay") is not None
+        else economy.get("derivedSpend")
+    )
+    if spent_value is None:
+        return False
+    spent = _number(spent_value)
     weapon = economy.get("weapon")
     w_cost = weapon_cost(weapon)
     loadout = _number(economy.get("loadoutValue"))

@@ -11,6 +11,7 @@ if ensure_env_script.exists():
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 import uvicorn
@@ -58,6 +59,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 
 # ---- Cache-Control middleware ----
@@ -81,9 +83,6 @@ class CacheControlMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault("X-Frame-Options", "DENY")
-        if request.method == "GET" and path in {"/content/mapas", "/content/mapas-geo"}:
-            response.headers["Cache-Control"] = "no-store"
-            return response
         if request.method == "GET" and response.status_code == 200:
             for prefix, header_value in _CACHE_RULES:
                 if path.startswith(prefix):

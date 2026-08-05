@@ -71,7 +71,14 @@ export function AgentCard({
         }}
       >
         <GitCompare size={15} aria-hidden="true" />
+        <span className="agent-compare-tooltip" role="tooltip">
+          {compared ? "Quitar de la comparación" : "Añadir a la comparación"}
+        </span>
       </span>
+
+      {!hasStats && (
+        <span className="agent-unavailable-badge">Agente sin salir</span>
+      )}
 
       {agent.displayIcon && (
         <div className="agent-image-frame">
@@ -87,12 +94,12 @@ export function AgentCard({
       <div className="agent-card-body">
         <h2 className="agent-name">{agent.displayName}</h2>
         <p className="agent-role">{agent.role.displayName}</p>
-        <div className="agent-score-line">
+        {hasStats && <div className="agent-score-line">
           <span>Score</span>
           <strong>{formatNumber(agent.score, 1)}</strong>
           {agent.lowSample && <em>Baja muestra</em>}
-        </div>
-        <div className="agent-card-metrics">
+        </div>}
+        {hasStats && <div className="agent-card-metrics">
           <div>
             <span>Pick Rate</span>
             <strong>{hasStats ? formatPercent(agent.globalStats?.pick_rate) : "-"}</strong>
@@ -101,7 +108,7 @@ export function AgentCard({
             <span>Win Rate</span>
             <strong>{hasStats ? formatPercent(agent.globalStats?.win_rate) : "-"}</strong>
           </div>
-        </div>
+        </div>}
       </div>
     </button>
   );

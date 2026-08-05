@@ -14,9 +14,10 @@ import {
   useGlobalMapStats,
   useMapas,
   usePlayerDashboard,
-  useRegions,
+  useRegionOptions,
 } from "../api/hooks";
 import { ComparisonTable } from "../components/comparison/ComparisonTable";
+import LoadingModal from "../components/ui/LoadingModal";
 import { useAuth } from "../context/AuthContext";
 import type { ActContent, MapContent } from "../types/content";
 import type {
@@ -847,10 +848,7 @@ function MapRoundTypesCard({
         mapa.
       </p>
       {showSelectedStatsLoading ? (
-        <div className="mapas-inline-loading" role="status" aria-live="polite">
-          <div className="loading-spinner" />
-          <span>Cargando estadisticas del mapa</span>
-        </div>
+        <LoadingModal placement="section" />
       ) : roundTypeShares.length === 0 ? (
         <div className="mapas-empty-panel">
           Sin datos de ceremonias de ronda.
@@ -1043,12 +1041,7 @@ function RecommendationPanel({
 }
 
 function PanelLoading() {
-  return (
-    <div className="mapas-inline-loading" role="status" aria-live="polite">
-      <div className="loading-spinner" />
-      <span>Cargando estadisticas del mapa</span>
-    </div>
-  );
+  return <LoadingModal placement="section" />;
 }
 
 function CompositionIdentity({
@@ -1087,7 +1080,7 @@ export default function Mapas() {
   const agentsQuery = useAgentes();
   const weaponsQuery = useArmas();
   const actsQuery = useActos();
-  const regionsQuery = useRegions();
+  const regionsQuery = useRegionOptions();
   const { data: regions } = regionsQuery;
   const [search, setSearch] = useState("");
   const [modeFilter, setModeFilter] = useState<string>(COMPETITIVE);
@@ -1111,12 +1104,9 @@ export default function Mapas() {
     Boolean(auth.user?.puuid) &&
     !selectedRegion &&
     personalDashboardQuery.isLoading;
-  const canLoadGlobalMapStats =
-    !auth.isLoggedIn ||
-    !auth.user?.puuid ||
-    Boolean(selectedRegion) ||
-    personalDashboardQuery.isError ||
-    (personalDashboardQuery.isSuccess && !playerRegion);
+  // Wait for the definitive initial region. This avoids requesting the global
+  // aggregate and immediately replacing it with a region-specific request.
+  const canLoadGlobalMapStats = Boolean(selectedRegion);
   const globalMapStatsQuery = useGlobalMapStats(
     {
       region: selectedRegion,
@@ -1569,6 +1559,7 @@ export default function Mapas() {
     weaponsQuery.isLoading ||
     actsQuery.isLoading ||
     regionsQuery.isLoading ||
+    (globalMapStatsQuery.isLoading && !globalMapStatsQuery.data) ||
     isWaitingForPlayerRegion;
 
   useEffect(() => {
@@ -1619,7 +1610,6 @@ export default function Mapas() {
             <span className="content-badge">Acto: {actFilter !== ALL ? optionLabel(formattedActOptions, actFilter) : "Todos"}</span>
             <span className="content-badge">{selectedStats?.matches ? `${formatCompactNumber(selectedStats.matches)} partidas globales` : "Sin datos globales"}</span>
             <span className="content-badge">{personalStats?.matches ? `${formatCompactNumber(personalStats.matches)} partidas personales` : "Sin datos personales"}</span>
-            {showSelectedStatsLoading && <span className="content-badge">Cargando estadísticas</span>}
           </div>
         </div>
         {(selected.splash || selected.listViewIconTall) && (
@@ -1857,14 +1847,7 @@ export default function Mapas() {
           </section>
 
           {showStatsLoading && (
-            <div
-              className="mapas-inline-loading"
-              role="status"
-              aria-live="polite"
-            >
-              <div className="loading-spinner" />
-              <span>Cargando estadísticas globales</span>
-            </div>
+            <LoadingModal placement="overlay" />
           )}
 
           {globalMapStatsQuery.isError && (

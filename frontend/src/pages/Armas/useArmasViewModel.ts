@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useArmas, useGear, usePlayerDashboard, useRegions } from "../../api/hooks";
+import {
+  useArmas,
+  useGear,
+  usePlayerDashboard,
+  useRegionWeaponStats,
+} from "../../api/hooks";
 import { useAuth } from "../../context/AuthContext";
 import { normalizeArrayResponse, normalizeLabel } from "../../utils/formatters";
 import type { GearContent } from "../../types/content";
@@ -27,6 +32,7 @@ import {
   buildWeaponStatsResolver,
   getNumericCost,
   getWeaponProfileTags,
+  getWeaponHeadshotSample,
   getWeaponSampleReliability,
   matchesWeaponStatsFilter,
   normalizeWeaponCategory,
@@ -51,6 +57,8 @@ function sumField(target: RegionWeaponStats, source: RegionWeaponStats, key: key
 
 function aggregateRegionWeaponStats(regionsData: Array<{ totalRounds?: number; weaponStats?: Record<string, RegionWeaponStats> }> | undefined) {
   const byId: Record<string, RegionWeaponStats> = {};
+  const headshotsById = new Map<string, number>();
+  const impactsById = new Map<string, number>();
   let totalRounds = 0;
   for (const region of regionsData ?? []) {
     totalRounds += Number(region?.totalRounds ?? 0);
@@ -71,19 +79,20 @@ function aggregateRegionWeaponStats(regionsData: Array<{ totalRounds?: number; w
       sumField(acc, stats, "damage_received");
       sumField(acc, stats, "survival_rounds");
       sumField(acc, stats, "loadout_value_total");
+      const headshotSample = getWeaponHeadshotSample(stats);
+      if (headshotSample) {
+        headshotsById.set(weaponId, (headshotsById.get(weaponId) ?? 0) + headshotSample.headshots);
+        impactsById.set(weaponId, (impactsById.get(weaponId) ?? 0) + headshotSample.impacts);
+      }
       byId[weaponId] = acc;
     }
   }
 
-  for (const stats of Object.values(byId)) {
+  for (const [weaponId, stats] of Object.entries(byId)) {
     const rounds = Number(stats.rounds_equipped ?? 0);
     const kills = Number(stats.kills ?? 0);
     const deaths = Number(stats.deaths ?? 0);
     const wins = Number(stats.wins ?? 0);
-    const headshots = Number(stats.headshots ?? 0);
-    const bodyshots = Number(stats.bodyshots ?? 0);
-    const legshots = Number(stats.legshots ?? 0);
-    const totalShots = headshots + bodyshots + legshots;
     const damageDealt = Number(stats.damage_dealt ?? 0);
     const damageReceived = Number(stats.damage_received ?? 0);
     const survivalRounds = Number(stats.survival_rounds ?? 0);
@@ -96,7 +105,11 @@ function aggregateRegionWeaponStats(regionsData: Array<{ totalRounds?: number; w
     stats.survival_rate = rounds > 0 ? (survivalRounds * 100) / rounds : 0;
     stats.damage_received_per_round = rounds > 0 ? damageReceived / rounds : 0;
     stats.average_loadout_value = rounds > 0 ? loadout / rounds : 0;
-    stats.headshot_pct = totalShots > 0 ? (headshots * 100) / totalShots : 0;
+    // Media global ponderada por todos los impactos de la muestra. Los
+    // documentos históricos sin distribución completa quedan sin porcentaje.
+    const totalHeadshots = headshotsById.get(weaponId) ?? 0;
+    const totalImpacts = impactsById.get(weaponId) ?? 0;
+    stats.headshot_pct = totalImpacts > 0 ? (totalHeadshots * 100) / totalImpacts : undefined;
     stats.pick_rate_per_round = totalRounds > 0 ? (rounds * 100) / totalRounds : 0;
   }
 
@@ -117,7 +130,11 @@ export function useArmasViewModel() {
     isError: gearError,
     error: gearErrorValue,
   } = useGear();
-  const { data: regions } = useRegions();
+  const {
+    data: regions,
+    isLoading: regionsLoading,
+    isFetching: regionsFetching,
+  } = useRegionWeaponStats();
   const personalDashboardQuery = usePlayerDashboard(
     auth.user?.puuid,
     undefined,
@@ -357,7 +374,11 @@ export function useArmasViewModel() {
     hasSession: auth.isLoggedIn,
     insights,
     isError: weaponsError || gearError,
-    isLoading: weaponsLoading || gearLoading,
+    isLoading:
+      weaponsLoading ||
+      gearLoading ||
+      regionsLoading ||
+      regionsFetching,
     navigate,
     overviewStats,
     personalComparison,

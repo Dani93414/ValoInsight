@@ -9,7 +9,12 @@ import {
   ContentLoading,
   ContentShell,
 } from "./contentPageUtils";
-import { hideBrokenImage, normalizeText } from "./contentFormatters";
+import {
+  fallbackToOriginalImage,
+  getImageDerivative,
+  normalizeText,
+} from "./contentFormatters";
+import { useProgressiveList } from "../hooks/useProgressiveList";
 import "./ContentPages.css";
 
 type CosmeticGridPageProps<T extends NamedContentItem> = {
@@ -113,6 +118,10 @@ export default function CosmeticGridPage<T extends NamedContentItem>({
         (!extraFilter || extraFilter(item)),
     );
   }, [extraFilter, getSearchText, items, search]);
+  const progressive = useProgressiveList(
+    filtered,
+    `${search}:${filtered.length}`,
+  );
   const viewState = { items, filtered, selected };
   const canOpenDetail = !disableDetail;
   const selectedKey = canOpenDetail && selected ? selected.uuid ?? selected.displayName : null;
@@ -185,9 +194,12 @@ export default function CosmeticGridPage<T extends NamedContentItem>({
             {getImage(selected) && (
               <img
                 className="content-detail-image"
-                src={getImage(selected) ?? ""}
+                src={getImageDerivative(getImage(selected), "medium")}
                 alt={selected.displayName}
-                onError={hideBrokenImage}
+                decoding="async"
+                onError={(event) =>
+                  fallbackToOriginalImage(event, getImage(selected) ?? "")
+                }
               />
             )}
           </div>
@@ -251,8 +263,9 @@ export default function CosmeticGridPage<T extends NamedContentItem>({
           {filtered.length === 0 ? (
             <ContentEmpty message="No hay resultados con ese filtro." />
           ) : (
-            <div className={`content-grid ${gridClassName ?? ""}`.trim()} ref={gridRef}>
-              {filtered.map((item, index) => {
+            <>
+              <div className={`content-grid ${gridClassName ?? ""}`.trim()} ref={gridRef}>
+              {progressive.visibleItems.map((item, index) => {
                 const itemKey = item.uuid ?? item.displayName;
                 const active = canOpenDetail && selectedKey === itemKey;
                 const image = getImage(item);
@@ -262,10 +275,11 @@ export default function CosmeticGridPage<T extends NamedContentItem>({
                       <span className="content-card-image-wrap">
                         <img
                           className="content-card-image"
-                          src={image}
+                          src={getImageDerivative(image, "thumb")}
                           alt={item.displayName}
                           loading="lazy"
-                          onError={hideBrokenImage}
+                          decoding="async"
+                          onError={(event) => fallbackToOriginalImage(event, image)}
                         />
                       </span>
                     )}
@@ -312,7 +326,15 @@ export default function CosmeticGridPage<T extends NamedContentItem>({
                   </div>
                 );
               })}
-            </div>
+              </div>
+              {progressive.hasMore && (
+                <div ref={progressive.sentinelRef} className="content-load-more">
+                  <button type="button" onClick={progressive.showMore}>
+                    Mostrar más ({filtered.length - progressive.visibleCount})
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import BackButton from "../../components/BackButton";
 import FloatingActionButton from "../../components/FloatingActionButton";
+import PageLoadingScreen from "../../components/ui/PageLoadingScreen";
 import "../Armas.css";
 import { WeaponCompareDrawer } from "./components/WeaponCompareDrawer";
 import { WeaponCompareSelector } from "./components/WeaponCompareSelector";
@@ -98,15 +99,7 @@ export default function Armas() {
   };
 
   if (viewModel.isLoading) {
-    return (
-      <div className="loading-screen" role="status" aria-live="polite">
-        <div className="loading-card">
-          <div className="loading-spinner" />
-          <h2>Cargando arsenal</h2>
-          <p>Comprando en la tienda...</p>
-        </div>
-      </div>
-    );
+    return <PageLoadingScreen />;
   }
 
   if (viewModel.isError) {
@@ -157,13 +150,11 @@ export default function Armas() {
         categories={viewModel.categories}
         search={viewModel.search}
         sortKey={viewModel.sortKey}
-        statsFilter={viewModel.statsFilter}
         summary={viewModel.filterSummary}
         onCategoryChange={viewModel.setActiveCategory}
         onCostChange={viewModel.setActiveCost}
         onSearchChange={viewModel.setSearch}
         onSortChange={viewModel.setSortKey}
-        onStatsFilterChange={viewModel.setStatsFilter}
         onResetFilters={viewModel.resetFilters}
         onClearFilter={viewModel.clearFilter}
       />

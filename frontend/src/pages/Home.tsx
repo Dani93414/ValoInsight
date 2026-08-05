@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -28,9 +29,12 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useCompetitiveTiers, useRegions } from "../api/hooks";
+import { useCompetitiveTiers, useRegionSummaries } from "../api/hooks";
 import { searchPlayers } from "../api/stats.ts";
 import { useAuth } from "../context/AuthContext";
+import LoadingModal from "../components/ui/LoadingModal";
+import PageLoadingScreen from "../components/ui/PageLoadingScreen";
+import { canSearchPlayer, PLAYER_SEARCH_DEBOUNCE_MS } from "../utils/playerSearch";
 import {
   addFavorite,
   addRecentPlayer,
@@ -267,7 +271,7 @@ export default function Home() {
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [loadingUserSection, setLoadingUserSection] =
     useState<SearchSectionId | null>(null);
-  const regionsQuery = useRegions();
+  const regionsQuery = useRegionSummaries();
   const competitiveTiersQuery = useCompetitiveTiers();
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestSequenceRef = useRef(0);
@@ -293,7 +297,7 @@ export default function Home() {
       return;
     }
 
-    if (trimmedGameName.length < 3 && trimmedTagLine.length < 3) {
+    if (!canSearchPlayer(trimmedGameName, trimmedTagLine)) {
       setResults([]);
       setLoading(false);
       return;
@@ -317,7 +321,7 @@ export default function Home() {
           setLoading(false);
         }
       }
-    }, 400);
+    }, PLAYER_SEARCH_DEBOUNCE_MS);
   };
 
   const refreshFavorites = async () => {
@@ -374,7 +378,7 @@ export default function Home() {
       return;
     }
 
-    if (gameName.trim().length >= 3 || tagLine.trim().length >= 3) {
+    if (canSearchPlayer(gameName, tagLine)) {
       handleSearch(gameName, tagLine);
     }
   };
@@ -470,8 +474,19 @@ export default function Home() {
     };
   }, [activeSearchSection, isLoggedIn]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const targets = document.querySelectorAll<HTMLElement>(".home-reveal");
+    const homePage = document.querySelector<HTMLElement>(".home-page");
+
+    if (
+      !("IntersectionObserver" in window)
+      || window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      targets.forEach((target) => target.classList.add("home-is-visible"));
+      return;
+    }
+
+    homePage?.classList.add("home-reveal-ready");
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -485,8 +500,11 @@ export default function Home() {
     );
 
     targets.forEach((target) => observer.observe(target));
-    return () => observer.disconnect();
-  }, []);
+    return () => {
+      observer.disconnect();
+      homePage?.classList.remove("home-reveal-ready");
+    };
+  }, [competitiveTiersQuery.isLoading, regionsQuery.isLoading]);
 
   useEffect(() => {
     const updateScrollHintVisibility = () => {
@@ -702,6 +720,10 @@ export default function Home() {
     );
   };
 
+  if (regionsQuery.isLoading || competitiveTiersQuery.isLoading) {
+    return <PageLoadingScreen />;
+  }
+
   return (
     <main className="home-page">
       <section className="home-hero" aria-labelledby="home-hero-title">
@@ -792,10 +814,7 @@ export default function Home() {
             <>
               <div className="home-search-status" aria-live="polite">
                 {loading && (
-                  <div className="home-search-loading">
-                    <span className="home-search-spinner" />
-                    Buscando jugador...
-                  </div>
+                  <LoadingModal placement="section" />
                 )}
 
                 {!loading && showMinCharactersMessage && (
@@ -809,7 +828,7 @@ export default function Home() {
                 )}
               </div>
 
-              {results.length > 0 && (
+              {!loading && results.length > 0 && (
                 <ul className="home-search-results">
                   {results.map((result, index) => {
                     const playerNameTag = result.tagLine
@@ -903,10 +922,7 @@ export default function Home() {
           ) : (
             <>
               {loadingUserSection === activeSearchSection && (
-                <div className="home-search-loading">
-                  <span className="home-search-spinner" />
-                  Cargando datos...
-                </div>
+                <LoadingModal placement="section" />
               )}
 
               {loadingUserSection !== activeSearchSection &&

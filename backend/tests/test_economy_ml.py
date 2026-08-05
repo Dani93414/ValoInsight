@@ -7,7 +7,9 @@ import pandas as pd
 import numpy as np
 import joblib
 
-from modules.economy_ml.action_profiles import observed_action_features, simulate_action_features
+from modules.economy_ml.action_profiles import (
+    learn_action_profiles, observed_action_features, simulate_action_features,
+)
 from modules.economy_ml.buy_classifier import (
     classify_team_buy_action,
     is_heavy_armor,
@@ -25,7 +27,7 @@ from modules.economy_ml.dataset_builder import (
     validate_dataset,
 )
 from modules.economy_ml.similar_rounds import find_similar_rounds
-from modules.economy_ml.policy import recommend_economy_action
+from modules.economy_ml.policy import _policy_gate, recommend_economy_action
 from modules.economy_ml.plan_allocator import allocate_player_loadouts
 from modules.economy_ml.player_recommendations import build_player_recommendations
 from modules.economy_ml.ability_planner import recommend_ability_purchase
@@ -272,7 +274,7 @@ class EconomyMlTests(unittest.TestCase):
         self.assertLessEqual(sheriff_player["total_cost"], 800)
 
     def test_pistol_free_light_exception_allows_free_light_armor(self):
-        economy = {"weapon": "Sheriff", "armor": "Light", "spent": 800, "loadoutValue": 1200}
+        economy = {"weapon": "Sheriff", "armor": "Light", "totalOutlay": 800, "loadoutValue": 1200}
         self.assertTrue(infer_pistol_free_light_armor_from_economy(1, economy))
         match = _match()
         state = {
@@ -342,8 +344,8 @@ class EconomyMlTests(unittest.TestCase):
         self.assertIn("team_player_credit_estimates", state)
         self.assertNotIn("team_player_credit_estimates", PREBUY_NUMERIC_FEATURES)
 
-    def test_schema_version_10(self):
-        self.assertEqual(SCHEMA_VERSION, 10)
+    def test_schema_version_12(self):
+        self.assertEqual(SCHEMA_VERSION, 12)
 
     def test_content_taxonomy_knows_bandit_and_regen_shield(self):
         self.assertEqual(weapon_role({"displayName": "Bandit"}), "sidearm")
@@ -378,11 +380,11 @@ class EconomyMlTests(unittest.TestCase):
         match = _match()
         match["roundResults"][0]["playerStats"][0]["economy"]["remaining"] = 9000
         state = extract_match_round_states(match)[0]
-        self.assertNotEqual(state["prebuy_credits_observed"], state["prebuy_credits_rules"])
+        self.assertIsNone(state["prebuy_credits_observed"])
         self.assertEqual(state["prebuy_credits_rules"], 4000)
         self.assertEqual(state["prebuy_credits_selected"], 4000)
         self.assertEqual(state["team_estimated_credits_before_buy"], 4000)
-        self.assertEqual(state["credit_estimate_quality"], "inconsistent")
+        self.assertEqual(state["credit_estimate_quality"], "rules_only")
 
     def test_rules_credits_do_not_copy_current_observed_prebuy(self):
         match = _match()
@@ -399,8 +401,7 @@ class EconomyMlTests(unittest.TestCase):
         ]
         rows = extract_match_round_states(match)
         round_two = next(row for row in rows if row["round_number"] == 2 and row["team_id"] == "A")
-        self.assertEqual(round_two["prebuy_credits_observed"], 15000)
-        self.assertNotEqual(round_two["prebuy_credits_rules"], round_two["prebuy_credits_observed"])
+        self.assertIsNone(round_two["prebuy_credits_observed"])
         self.assertEqual(round_two["prebuy_credits_selected"], round_two["prebuy_credits_rules"])
 
     def test_regen_shield_features_and_plan_penalty(self):
@@ -465,6 +466,31 @@ class EconomyMlTests(unittest.TestCase):
         self.assertEqual(stack["action_sheriff_count"], 5)
         self.assertLess(one["action_total_spent"], two["action_total_spent"])
         self.assertLess(two["action_total_spent"], stack["action_total_spent"])
+
+    def test_learned_action_profile_preserves_utility_and_component_sum(self):
+        row = {
+            "real_buy_action": "FULL_RIFLES", "action_weapon_value": 14500,
+            "action_armor_value": 5000, "action_utility_value": 3200,
+            "action_total_loadout_value": 22700, "action_total_spend": 18000,
+            "action_heavy_armor_count": 5, "action_regen_armor_count": 0,
+            "action_light_armor_count": 0, "action_no_armor_count": 0,
+            "action_rifle_count": 5, "action_smg_count": 0,
+            "action_sniper_count": 0, "action_operator_count": 0,
+            "action_outlaw_count": 0, "action_marshal_count": 0,
+            "action_sheriff_count": 0, "action_players_without_heavy_armor": 0,
+            "action_players_without_strong_armor": 0,
+        }
+        profile = learn_action_profiles(pd.DataFrame([row] * 25))["FULL_RIFLES"]
+        simulated = simulate_action_features(
+            {"team_estimated_credits_before_buy": 25000}, "FULL_RIFLES", profile,
+        )
+        self.assertEqual(simulated["action_utility_value"], 3200)
+        self.assertEqual(
+            simulated["action_total_loadout_value"],
+            simulated["action_weapon_value"]
+            + simulated["action_armor_value"]
+            + simulated["action_utility_value"],
+        )
 
     def test_context_key_detects_eco(self):
         state = {"is_match_point": 0, "is_overtime": 0, "is_pistol_round": 0}
@@ -713,8 +739,54 @@ class EconomyMlTests(unittest.TestCase):
         ):
             result = recommend_economy_action(state, ["ECO_CLASSIC", "ECO_ONE_SHERIFF"])
         self.assertEqual(result["recommendation_strength"], "low")
+        self.assertFalse(result["guidance_enabled"])
         self.assertLess(result["recommendation_margin"], 0.04)
         self.assertIn("Margen insuficiente", result["low_confidence_reason"])
+
+    def test_policy_abstains_outside_selected_action_scope(self):
+        class FakePipeline:
+            def predict_proba(self, _frame):
+                return np.array([[0.2, 0.8]])
+
+        state = {
+            **extract_match_round_states(_match())[0],
+            "credit_estimate_quality": "exact_observed",
+        }
+        bundle = {
+            "pipeline": FakePipeline(),
+            "action_support": {"ECO_CLASSIC": 100},
+            "min_action_support": 25,
+            "policy_config": {
+                "selected": True,
+                "allowed_actions": ["FULL_RIFLES"],
+                "case_margins": {"pistol": 0.0},
+                "disabled_cases": [],
+            },
+        }
+        with patch(
+            "modules.economy_ml.policy.load_model_candidates",
+            return_value=[(bundle, "global")],
+        ):
+            result = recommend_economy_action(state, ["ECO_CLASSIC"])
+        self.assertFalse(result["guidance_enabled"])
+        self.assertEqual(result["recommendation_status"], "abstained_low_confidence")
+        self.assertIn("abstiene", result["low_confidence_reason"])
+
+    def test_experimental_policy_override_is_explicit_and_bypasses_only_ope_gate(self):
+        bundle = {
+            "deployment_policy_enabled": True,
+            "experimental_policy_override": True,
+            "metrics": {
+                "policy_evaluation": {
+                    "improvement_confidence_interval_95": [-0.01, 0.01],
+                },
+            },
+        }
+        self.assertEqual(_policy_gate(bundle), (True, None))
+        bundle["experimental_policy_override"] = False
+        allowed, reason = _policy_gate(bundle)
+        self.assertFalse(allowed)
+        self.assertIn("confianza estadistica", reason)
 
     def test_policy_downgrades_inconsistent_credit_quality(self):
         class FakePipeline:

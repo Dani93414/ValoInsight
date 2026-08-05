@@ -8,7 +8,12 @@ import type {
   SkinLevelContent,
   ThemeContent,
 } from "../types/content";
-import { hideBrokenImage, normalizeText } from "./contentFormatters";
+import {
+  getImageDerivative,
+  hideBrokenImage,
+  normalizeText,
+  type ImageDerivative,
+} from "./contentFormatters";
 import {
   ClearableSearchInput,
   ContentEmpty,
@@ -16,6 +21,7 @@ import {
   ContentLoading,
   ContentShell,
 } from "./contentPageUtils";
+import { useProgressiveList } from "../hooks/useProgressiveList";
 import "./ContentPages.css";
 
 type OrganizationMode = "skins" | "collections" | "weapons";
@@ -236,14 +242,22 @@ function FallbackImage({
   alt,
   className,
   loading,
+  derivative = "thumb",
 }: {
   sources: Array<string | null | undefined>;
   alt: string;
   className?: string;
   loading?: "eager" | "lazy";
+  derivative?: ImageDerivative;
 }) {
   const sourcesKey = sources.filter(Boolean).join("|");
-  const resolvedSources = uniqueImages(sources);
+  const originalSources = uniqueImages(sources);
+  const resolvedSources = uniqueImages(
+    originalSources.flatMap((source) => [
+      getImageDerivative(source, derivative),
+      source,
+    ]),
+  );
   const [imageState, setImageState] = useState({ key: sourcesKey, index: 0 });
   const index = imageState.key === sourcesKey ? imageState.index : 0;
 
@@ -256,6 +270,7 @@ function FallbackImage({
       src={src}
       alt={alt}
       loading={loading}
+      decoding="async"
       onError={(event) => {
         if (index < resolvedSources.length - 1) {
           setImageState({ key: sourcesKey, index: index + 1 });
@@ -386,6 +401,7 @@ function SkinDetail({
               className="cskins-detail-main-image"
               sources={getSkinImageCandidates(skin)}
               alt={skin.displayName}
+              derivative="medium"
             />
           ) : (
             <div className="cskins-image-fallback">Sin imagen</div>
@@ -837,6 +853,10 @@ export default function CosmeticosSkins() {
   const effectiveSelectedGroupKey = selectedGroupKey;
   const selectedGroup = groups.find((group) => group.key === effectiveSelectedGroupKey) ?? null;
   const selectedItems = mode === "skins" ? filteredSkins : selectedGroup?.items ?? [];
+  const progressiveSkins = useProgressiveList(
+    selectedItems,
+    `${mode}:${search}:${tierFilter}:${selectedItems.length}`,
+  );
   const selectedSkin =
     selectedSkinKey
       ? filteredSkins.find((skin) => getSkinKey(skin) === selectedSkinKey) ?? null
@@ -869,6 +889,12 @@ export default function CosmeticosSkins() {
     : -1;
   const allSkinDetailInsertIndex =
     allSkinIndex >= 0 ? getInsertIndex(allSkinIndex, allSkinGridColumns, selectedItems.length) : -1;
+
+  useEffect(() => {
+    if (mode === "skins" && allSkinIndex >= 0) {
+      progressiveSkins.revealThrough(allSkinIndex);
+    }
+  }, [allSkinIndex, mode, progressiveSkins.revealThrough]);
 
   const setGroupCardRef = (key: string) => (element: HTMLButtonElement | null) => {
     if (element) groupCardRefs.current.set(key, element);
@@ -1197,7 +1223,7 @@ export default function CosmeticosSkins() {
             <section className="content-section cskins-content-section">
               <h2 className="content-section-title">Skins</h2>
               <div className="content-grid cskins-skin-grid" ref={allSkinGridRef}>
-                {selectedItems.map((skin, index) => {
+                {progressiveSkins.visibleItems.map((skin, index) => {
                   const key = getSkinKey(skin);
                   const skinOpen = selectedSkinKey === key;
                   const imageSources = [
@@ -1244,6 +1270,13 @@ export default function CosmeticosSkins() {
                   );
                 })}
               </div>
+              {progressiveSkins.hasMore && (
+                <div ref={progressiveSkins.sentinelRef} className="content-load-more">
+                  <button type="button" onClick={progressiveSkins.showMore}>
+                    Mostrar más ({selectedItems.length - progressiveSkins.visibleCount})
+                  </button>
+                </div>
+              )}
             </section>
           )}
         </>

@@ -54,5 +54,6 @@ export function useHeatmapFilterOptions(
     gcTime: HEATMAP_STALE * 3,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+    placeholderData: keepPreviousData,
   });
 }

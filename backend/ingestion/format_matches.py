@@ -286,7 +286,12 @@ def build_output(template: Dict[str, Any], src_raw: Dict[str, Any]) -> Dict[str,
                     "weapon": (eco.get("weapon") or {}).get("id"),
                     "armor": (eco.get("armor") or {}).get("id") if eco.get("armor") else None,
                     "remaining": eco.get("remaining"),
+                    # HenrikDev v4 does not expose real round spend. Keep this
+                    # compatibility value explicitly quarantined; economy_ml
+                    # v12 never uses it as observed purchase evidence.
                     "spent": max(0, (eco.get("loadout_value") or 0) - (eco.get("remaining") or 0)),
+                    "spentSource": "legacy_invalid_loadout_minus_remaining",
+                    "observedFields": ["loadoutValue", "weapon", "armor", "remaining"],
                 },
                 "ability": {
                     # No existe en tu source => default "string" del template
@@ -294,7 +299,15 @@ def build_output(template: Dict[str, Any], src_raw: Dict[str, Any]) -> Dict[str,
                     "ability1Effects": None,
                     "ability2Effects": None,
                     "ultimateEffects": None,
-                }
+                },
+                "sourceMetadata": {
+                    key: ps.get(key)
+                    for key in (
+                        "was_afk", "afk", "stayed_in_spawn", "stayedInSpawn",
+                        "penalty", "penalties", "behavior", "disconnected",
+                    )
+                    if key in ps
+                },
             }
 
             # damage_events

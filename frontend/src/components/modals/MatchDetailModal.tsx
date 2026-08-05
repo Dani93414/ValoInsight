@@ -37,6 +37,7 @@ import {
   useMapasGeo,
   useCompetitiveTiers,
 } from "../../api/hooks";
+import LoadingModal from "../ui/LoadingModal";
 import {
   safeDivide,
   formatDateTime,
@@ -891,17 +892,17 @@ function MatchLoadoutTimeline({
     <section className="match-loadout-timeline-panel">
       <div className="match-loadout-timeline-header">
         <div>
-          <h4>Comparativa de loadout por ronda</h4>
+          <h4>Comparativa de equipamiento por ronda</h4>
           <p>Valor total de equipamiento por equipo antes de cada ronda.</p>
         </div>
-        <div className="match-loadout-legend" aria-label="Leyenda loadout">
+        <div className="match-loadout-legend" aria-label="Leyenda de equipamiento">
           <span><i className="is-team-a" /> {teamALabel}</span>
           <span><i className="is-team-b" /> {teamBLabel}</span>
         </div>
       </div>
 
       {data.length === 0 || globalMax <= 0 ? (
-        <div className="empty-chart">No hay datos de loadout por ronda.</div>
+        <div className="empty-chart">No hay datos de equipamiento por ronda.</div>
       ) : (
         <div className="match-loadout-timeline-scroll">
           {data.map((round) => {
@@ -2233,7 +2234,7 @@ function buildRoundMomentumTicketEvents({
     ) {
       add(
         "large-loadout-upset",
-        "Victoria con gran desventaja de loadout",
+        "Victoria con gran desventaja de equipamiento",
         `El ganador comenzó con ${formatNumber(loadoutGap)} menos de equipamiento.`,
         round.winnerTeamId,
         Math.min(1, 0.4 + loadoutGap / 20_000),
@@ -2248,7 +2249,7 @@ function buildRoundMomentumTicketEvents({
       add(
         "full-wasted",
         "FULL desperdiciada",
-        "El rival perdió pese a comenzar con una ventaja importante de loadout.",
+        "El rival perdió pese a comenzar con una ventaja importante de equipamiento.",
         round.winnerTeamId,
         0.55,
       );
@@ -2999,7 +3000,7 @@ function buildRoundMomentumViewModels({
         ? `Tu equipo tenía ${selectedEconomy.economy} contra ${opponentEconomy.economy}.`
         : "",
       Math.abs(selectedEconomy.loadout - opponentEconomy.loadout) >= 2500
-        ? `Diferencia de loadout: ${formatNumber(selectedEconomy.loadout - opponentEconomy.loadout)} desde tu equipo.`
+        ? `Diferencia de equipamiento: ${formatNumber(selectedEconomy.loadout - opponentEconomy.loadout)} desde tu equipo.`
         : "",
       currentMomentum?.isStreakBreaker ? "Rompió una racha previa." : "",
     ].filter(Boolean).slice(0, 3);
@@ -3774,30 +3775,41 @@ function economyCreditQualityLabel(quality?: string | null): string {
 function economyCaseLabel(value?: string | null): string {
   if (!value) return "N/D";
   const labels: Record<string, string> = {
-    LAST_HALF_ROUND_BUY: "last half round buy",
-    ELIMINATION_BUY: "elimination buy",
-    CLOSING_BUY: "closing buy",
-    OVERTIME_BUY: "overtime buy",
-    ENEMY_PISTOL: "pistol",
-    UNDERINVESTED_BUY: "underinvested buy",
+    PISTOL_UTILITY: "Pistola con utilidad",
+    PISTOL_SIDEARM: "Pistola mejorada",
+    PISTOL_ARMOR: "Pistola con escudo",
+    PISTOL_DEFAULT: "Pistola estándar",
+    POST_PISTOL_CONVERSION: "Conversión tras pistola",
+    ANTI_ECO: "Antieco",
+    ECO: "Ahorro",
+    HALF_BUY: "Compra parcial",
+    FORCE_BUY: "Compra forzada",
+    FULL_BUY: "Compra completa",
+    BONUS_UPGRADE: "Mejora de la ronda de bonificación",
+    BONUS_KEEP_WEAPONS: "Ronda de bonificación conservando armas",
+    BONUS_KEEP_INVENTORY: "Ronda de bonificación conservando equipamiento",
+    BROKEN_BUY: "Compra descoordinada",
+    UNDERINVESTED_BUY: "Compra insuficiente",
+    LAST_HALF_ROUND_BUY: "Compra de última ronda de mitad",
+    ELIMINATION_BUY: "Compra para evitar eliminación",
+    CLOSING_BUY: "Compra para cerrar la partida",
+    OVERTIME_BUY: "Compra de prórroga",
+    ENEMY_PISTOL: "Ronda de pistolas",
   };
   if (labels[value]) return labels[value];
-  return value.replaceAll("_", " ").toLowerCase();
+  return value.replaceAll("_", " ").toLocaleLowerCase("es-ES");
 }
 
 function economyItemLabel(item?: { displayName?: string | null } | null): string {
   return item?.displayName || "No comprar";
 }
 
-function economyInferenceLabel(source?: string | null): string {
-  switch (source) {
-    case "default_spawn_weapon": return "Arma inicial gratis";
-    case "carried": return "Arma conservada";
-    case "bought_self": return "Compra propia probable";
-    case "bought_by_teammate": return "Drop recibido probable";
-    case "picked_up": return "Arma recogida probable";
-    default: return "Origen desconocido";
-  }
+function normalizeAgentReference(value?: string | null): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es-ES")
+    .replace(/[^a-z0-9]/g, "");
 }
 
 function PlayerFirstEconomyPanel({
@@ -3806,149 +3818,170 @@ function PlayerFirstEconomyPanel({
   teamBId,
   teamALabel,
   teamBLabel,
+  agents,
 }: {
   ml: EconomyMlResponse;
   teamAId: string;
   teamBId: string;
   teamALabel: string;
   teamBLabel: string;
+  agents: AgentContent[];
 }) {
-  const teamLabel = (teamId: string) =>
-    teamId === teamAId ? teamALabel : teamId === teamBId ? teamBLabel : teamId;
-  const averageConfidence = safeDivide(
-    ml.rounds.reduce((sum, round) => sum + round.confidence, 0),
-    ml.rounds.length,
-  );
+  const agentsByReference = useMemo(() => {
+    const references = new Map<string, AgentContent>();
+    for (const agent of agents) {
+      for (const reference of [agent.uuid, agent.id, agent.displayName, agent.name]) {
+        const key = normalizeAgentReference(reference);
+        if (key) references.set(key, agent);
+      }
+    }
+    return references;
+  }, [agents]);
+  const roundsByNumber = useMemo(() => {
+    const grouped = new Map<number, Map<string, EconomyMlResponse["rounds"][number]>>();
+    for (const round of ml.rounds) {
+      const teams = grouped.get(round.round_number) ?? new Map();
+      teams.set(round.team_id, round);
+      grouped.set(round.round_number, teams);
+    }
+    return [...grouped.entries()].sort(([a], [b]) => a - b);
+  }, [ml.rounds]);
+
+  const buyLabel = (round?: EconomyMlResponse["rounds"][number]) =>
+    round ? economyCaseLabel(round.recommended_team_buy) : "Sin datos";
+  const observedSpend = (round?: EconomyMlResponse["rounds"][number]) => {
+    const actualPlayers = (round?.actual_plan as { players?: Array<{ total_outlay?: number | null }> } | undefined)?.players ?? [];
+    return actualPlayers.reduce((sum, player) => sum + Number(player.total_outlay ?? 0), 0);
+  };
+  const recommendedSpend = (round?: EconomyMlResponse["rounds"][number]) =>
+    (((round?.recommended_plan as { players?: Array<{ total_outlay?: number | null }> } | undefined)?.players) ?? [])
+      .reduce((sum, player) => sum + Number(player.total_outlay ?? 0), 0);
+  const creditsBefore = (round?: EconomyMlResponse["rounds"][number]) =>
+    (round?.players ?? []).reduce((sum, player) => sum + Number(player.credits_before_buy ?? 0), 0);
+  const creditsRemaining = (round?: EconomyMlResponse["rounds"][number]) =>
+    (((round?.recommended_plan as { players?: Array<{ expected_remaining?: number | null }> } | undefined)?.players) ?? [])
+      .reduce((sum, player) => sum + Number(player.expected_remaining ?? 0), 0);
+  const roundNote = (round?: EconomyMlResponse["rounds"][number]) =>
+    round?.warnings?.[0] ?? "El plan recomendado mantiene una economía de equipo coherente.";
+  const scoreLabel = (round?: EconomyMlResponse["rounds"][number]) => {
+    if (round?.team_purchase_score == null) return "Sin nota";
+    if (round.team_recommendation_equivalent_to_actual) return "Sin diferencia";
+    const range = round.score_range;
+    if (range && range[0] !== range[1]) return `${formatNumber(range[0], 0)}–${formatNumber(range[1], 0)}`;
+    return `${formatNumber(round.team_purchase_score, 0)}/100`;
+  };
+  const observedBuyLabel = (round?: EconomyMlResponse["rounds"][number]) => {
+    const kind = classifyTeamEconomy(observedSpend(round));
+    return kind === "FULL" ? "Compra completa" : kind === "SEMIECO" ? "Compra parcial" : "Ahorro";
+  };
+
+  const renderTeamRound = (
+    roundNumber: number,
+    round: EconomyMlResponse["rounds"][number] | undefined,
+    teamLabel: string,
+    isOpponent = false,
+  ) => {
+    if (!round) {
+      return (
+        <div key={`${roundNumber}-${teamLabel}`} className={`match-economy-board-round is-missing ${isOpponent ? "is-opponent" : ""}`}>
+          <span className="match-economy-board-team-dot" />
+          <span><strong>{teamLabel}</strong><small>Sin recomendación disponible</small></span>
+        </div>
+      );
+    }
+    const side = String(round.side ?? "").toLowerCase();
+    const isAttack = side.includes("attack") || side.includes("ataque");
+    const actualBuy = observedBuyLabel(round);
+    return (
+      <details key={`${roundNumber}-${round.team_id}`} className={`match-economy-board-round ${isAttack ? "is-attack" : "is-defense"} ${isOpponent ? "is-opponent" : ""}`}>
+        <summary>
+          <span className="match-economy-board-team-identity">
+            <span className="match-economy-board-team-dot" />
+            <span><strong>{teamLabel}</strong><small>{isAttack ? "Ataque" : "Defensa"}</small></span>
+          </span>
+          <span className="match-economy-board-buy is-observed"><small>Compra realizada</small><strong>{actualBuy}</strong></span>
+          <span className="match-economy-board-buy"><small>Recomendación</small><strong>{buyLabel(round)}</strong></span>
+          <span className="match-economy-board-grade"><small>Nota de compra</small><strong>{scoreLabel(round)}</strong><em>{round.team_grade ?? ""}</em></span>
+          <span className="match-economy-board-confidence"><small>Confianza</small>{formatPercent(round.confidence * 100, 0)}</span>
+        </summary>
+        <div className="match-economy-board-round-body">
+          <div className="match-economy-board-notes">
+            <p><small>Compra realizada</small><strong>{actualBuy}</strong><span>{round.warnings?.[0] ?? "Sin incidencia económica destacable."}</span></p>
+            <p className="is-recommendation"><small>Recomendación económica</small><strong>{buyLabel(round)}</strong><span>{roundNote(round)}</span></p>
+          </div>
+          <div className="match-economy-board-totals">
+            <span><small>Créditos inicio</small><strong>{formatNumber(creditsBefore(round))}</strong></span>
+            <span><small>Compra real</small><strong>{formatNumber(observedSpend(round))}</strong></span>
+            <span><small>Plan recomendado</small><strong>{formatNumber(recommendedSpend(round))}</strong></span>
+            <span><small>Restante plan</small><strong>{formatNumber(creditsRemaining(round))}</strong></span>
+            <span><small>Valor perdido</small><strong>{formatNumber(round.value_gap ?? 0, 3)}</strong></span>
+          </div>
+          {round.ambiguity_reason && <p className="match-economy-board-uncertainty">{round.ambiguity_reason}</p>}
+          {round.coordination_only_improvement && <p className="match-economy-board-uncertainty">Las compras son buenas individualmente; la mejora estimada requiere cambiar la distribución del equipo de forma coordinada.</p>}
+          <div className="match-economy-board-players">
+            {round.players.map((player) => {
+              const purchase = player.recommended_purchase;
+              const agent = agentsByReference.get(normalizeAgentReference(player.agent));
+              const agentName = agent?.displayName ?? player.agent ?? "Agente no identificado";
+              const agentIcon = agent?.displayIconSmall ?? agent?.displayIcon;
+              const observed = [player.observed_weapon, player.observed_armor].filter(Boolean).join(" + ") || "Sin datos";
+              const recommended = purchase.display?.loadout_label ?? `${economyItemLabel(purchase.weapon)} + ${economyItemLabel(purchase.armor)}`;
+              const abilities = purchase.display?.ability_label ?? (purchase.abilities.length ? purchase.abilities.map((ability) => `${ability.name} ×${ability.charges}`).join(", ") : "Sin compra de habilidades");
+              const includedAbilities = purchase.display?.included_ability_label;
+              return <article key={player.puuid} className="match-economy-board-player">
+                <header>
+                  {agentIcon ? <img src={agentIcon} alt={agentName} onError={({ currentTarget }) => {
+                    const fallbackIcon = agent?.displayIcon;
+                    if (fallbackIcon && currentTarget.dataset.fallbackAttempted !== "true") {
+                      currentTarget.dataset.fallbackAttempted = "true";
+                      currentTarget.src = fallbackIcon;
+                    } else {
+                      currentTarget.classList.add("is-unavailable");
+                    }
+                  }} /> : <span className="match-economy-board-agent-fallback" aria-label={agentName} />}
+                  <div><strong>{player.player_name ?? "Jugador"}</strong><small>{agentName}</small></div>
+                </header>
+                <div className="match-economy-board-player-grade">
+                  <span><small>Nota individual</small><strong>{player.recommendation_equivalent_to_actual ? "Equivalente" : player.score_range && player.score_range[0] !== player.score_range[1] ? `${formatNumber(player.score_range[0], 0)}–${formatNumber(player.score_range[1], 0)}` : `${formatNumber(player.purchase_score ?? 0, 0)}/100`}</strong></span>
+                  <em>{player.grade ?? "Sin calificar"}</em>
+                </div>
+                <div className="match-economy-board-player-loadouts"><span><small>Compra real</small>{observed}</span><span className="is-recommended"><small>Mejor decisión individual</small>{recommended}</span></div>
+                <p className="match-economy-board-player-reason">{player.reason || "El modelo no identifica una mejora concreta."}</p>
+                <p className="match-economy-board-ability"><small>Habilidades recomendadas</small>{abilities}</p>
+                {includedAbilities && includedAbilities !== "Ninguna" && <p className="match-economy-board-ability"><small>Habilidades gratuitas o conservadas</small>{includedAbilities}</p>}
+                <footer><span><small>Inicio</small>{formatNumber(player.credits_before_buy ?? 0)}</span><span><small>Compra</small>{formatNumber(purchase.self_cost)}</span><span><small>Restante</small>{formatNumber(purchase.expected_remaining)}</span></footer>
+                {player.ambiguity_reason && <p className="match-economy-board-uncertainty">{player.ambiguity_reason}</p>}
+              </article>;
+            })}
+          </div>
+        </div>
+      </details>
+    );
+  };
 
   return (
-    <section className="match-economy-optimal-panel">
-      <div className="panel-header">
-        <div>
-          <h3 className="panel-title">Economía recomendada · player-first</h3>
-          <p className="panel-subtitle">
-            Planes legales construidos jugador por jugador, con inventario, utilidad por cargas, drops de armas y economía futura individual.
-          </p>
-        </div>
+    <section className="match-economy-optimal-panel match-economy-board-panel">
+      <h3 className="panel-title match-economy-board-title">Recomendaciones económicas</h3>
+      <div className="match-economy-board">
+        <article className="match-economy-board-team">
+          <header><span className="match-economy-board-team-dot" /><div><small>Equipo</small><h4>{teamALabel}</h4></div></header>
+          {roundsByNumber.map(([roundNumber, teams]) => renderTeamRound(roundNumber, teams.get(teamAId), teamALabel))}
+        </article>
+        <article className="match-economy-board-score">
+          <header><small>Seguimiento de rondas</small><h4>Marcador</h4></header>
+          {roundsByNumber.map(([roundNumber, teams]) => {
+            const round = teams.get(teamAId) ?? teams.get(teamBId);
+            const isTeamA = round?.team_id === teamAId;
+            const scoreA = isTeamA ? round?.score_before.team : round?.score_before.enemy;
+            const scoreB = isTeamA ? round?.score_before.enemy : round?.score_before.team;
+            return <div key={roundNumber} className="match-economy-board-score-row"><small>Ronda {roundNumber}</small><strong>{scoreA ?? "?"}<i>–</i>{scoreB ?? "?"}</strong></div>;
+          })}
+        </article>
+        <article className="match-economy-board-team is-opponent">
+          <header><span className="match-economy-board-team-dot" /><div><small>Equipo rival</small><h4>{teamBLabel}</h4></div></header>
+          {roundsByNumber.map(([roundNumber, teams]) => renderTeamRound(roundNumber, teams.get(teamBId), teamBLabel, true))}
+        </article>
       </div>
-      <div className="match-economy-optimal-summary">
-        <article><span>Motor</span><strong>{ml.engine}</strong></article>
-        <article><span>Rondas/equipos</span><strong>{ml.rounds.length}</strong></article>
-        <article><span>Confianza media</span><strong>{formatPercent(averageConfidence * 100, 1)}</strong></article>
-        <article><span>Partida</span><strong>{ml.match_id}</strong></article>
-      </div>
-      <div className="match-economy-optimal-table-wrap">
-        <table className="match-economy-optimal-table">
-          <thead><tr>
-            <th>Ronda</th><th>Equipo</th><th>Lado</th><th>Marcador</th><th>Plan</th>
-            <th>Score (0–1)</th><th>Confianza</th><th>Economía futura</th><th>Jugadores</th>
-          </tr></thead>
-          <tbody>
-            {ml.rounds.map((round) => (
-              <tr key={`${round.round_number}-${round.team_id}`}>
-                <td>{round.round_number}</td>
-                <td>{teamLabel(round.team_id)}</td>
-                <td>{round.side}</td>
-                <td>{round.score_before.team ?? "?"} - {round.score_before.enemy ?? "?"}</td>
-                <td><strong>{economyCaseLabel(round.recommended_team_buy)}</strong></td>
-                <td>{formatNumber(round.team_plan_score, 3)}</td>
-                <td>{formatPercent(round.confidence * 100, 1)}</td>
-                <td>
-                  <small>Victoria: {round.economy_projection.players_can_full_buy_if_win ?? 0} full buy</small>
-                  <small>Derrota: {round.economy_projection.players_can_full_buy_if_loss ?? 0} full buy</small>
-                  <small>Riesgo: {formatPercent((round.economy_projection.economic_risk ?? 0) * 100, 1)}</small>
-                </td>
-                <td>
-                  <details className="match-economy-ml-detail">
-                    <summary>Ver plan de {round.players.length} jugadores</summary>
-                    <div className="match-economy-ml-players">
-                      {round.team_plan_value != null ? <small>Valor interno del plan: {formatNumber(round.team_plan_value, 3)}</small> : null}
-                      <table className="match-economy-player-table">
-                        <thead><tr>
-                          <th>Jugador</th><th>Observado</th><th>Inferido</th><th>Recomendado</th>
-                          <th>Drop</th><th>Utilidad</th><th>Créditos</th><th>Avisos</th>
-                        </tr></thead>
-                        <tbody>
-                          {round.players.map((player) => {
-                            const purchase = player.recommended_purchase;
-                            return (
-                              <tr key={player.puuid}>
-                                <td><strong>{player.player_name || player.puuid}</strong><small>{player.agent || "N/D"} · {player.role || "N/D"}</small></td>
-                                <td>{[player.observed_weapon, player.observed_armor].filter(Boolean).join(" + ") || "N/D"}</td>
-                                <td>{economyInferenceLabel(player.inferred_real_purchase.weapon_source)}<small>{formatPercent(player.inferred_real_purchase.confidence * 100, 1)}</small></td>
-                                <td>
-                                  {purchase.display?.loadout_label ?? `${economyItemLabel(purchase.weapon)} + ${economyItemLabel(purchase.armor)}`}
-                                  <small>
-                                    {purchase.display?.source_label ?? (purchase.keep_weapon ? "Conservada" : purchase.bought_by ? "Recibida por drop" : "Compra propia")}
-                                    {" · "}Coste arma {formatNumber(purchase.weapon_cost)}
-                                    {" · "}Valor {formatNumber(purchase.weapon_value)}
-                                    {purchase.keep_armor ? ` · Armadura conservada (valor ${formatNumber(purchase.armor_value)})` : ""}
-                                  </small>
-                                  <small>{player.reason}</small>
-                                  {player.context_reasons?.map((reason) => <small key={reason}>{reason}</small>)}
-                                </td>
-                                <td>
-                                  {purchase.bought_by ? <small>Recibe de {purchase.bought_by}</small> : null}
-                                  {purchase.buys_for ? <small>Compra para {Array.isArray(purchase.buys_for) ? purchase.buys_for.join(", ") : purchase.buys_for}</small> : null}
-                                  {!purchase.bought_by && !purchase.buys_for ? "—" : null}
-                                </td>
-                                <td>{purchase.display?.ability_label ?? (purchase.abilities.length ? purchase.abilities.map((ability) => `${ability.name} ×${ability.charges}`).join(", ") : "Sin compra")}</td>
-                                <td>{formatNumber(player.credits_before_buy ?? 0)} → {formatNumber(purchase.expected_remaining)}<small>{purchase.display?.spend_label ?? `Gasto propio ${formatNumber(purchase.self_cost)}`}</small></td>
-                                <td>{player.warnings.join(" · ") || "—"}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                    {round.warnings.length ? <ul className="match-economy-ml-warnings">{round.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
-                    <details className="match-economy-ml-detail">
-                      <summary>Contexto avanzado</summary>
-                      {(() => {
-                        const advanced = round.advanced_context;
-                        const map = advanced?.map_context;
-                        const enemy = advanced?.enemy_economy;
-                        const enemyProjection = enemy?.enemy_projected_buy;
-                        const readyUlts = Object.values(advanced?.ultimates ?? {}).filter((item) => item.ultimate_ready);
-                        const profiles = Object.entries(advanced?.player_profiles ?? {}).filter(([, item]) => item.available);
-                        const durability = Object.entries(advanced?.armor_durability ?? {}).filter(([, item]) => item.available);
-                        const mlPrediction = advanced?.ml_prediction;
-                        const macroModel = advanced?.macro_model;
-                        if (!advanced) return <p>No disponible.</p>;
-                        return <div className="match-economy-ml-players">
-                          <small>Mapa: {map?.available ? map.map_name ?? "Conocido" : "No disponible"}</small>
-                          <small>Compra enemiga probable: {enemy?.available ? economyCaseLabel(enemy.enemy_buy_recommendation) : "No disponible"}</small>
-                          {enemyProjection ? <small>Loadout enemigo proyectado: arma {formatNumber(enemyProjection.projected_weapon_value ?? 0)} · armadura {formatNumber(enemyProjection.projected_armor_value ?? 0)} · utilidad {formatNumber(enemyProjection.projected_utility_value ?? 0)}</small> : null}
-                          <small>Site probable: {advanced.site_tendencies?.available ? advanced.site_tendencies.likely_attack_site ?? "N/D" : "No disponible"}</small>
-                          <small>Ultimates listas: {readyUlts.length ? readyUlts.map((item) => item.agent).join(", ") : "Ninguna confirmada"}</small>
-                          <small>Perfiles con muestra: {profiles.length || "No disponibles"}</small>
-                          <small>Armaduras con durabilidad: {durability.length || "No disponible"}</small>
-                          <small>ML ronda: {mlPrediction?.available && mlPrediction.round_win_probability != null ? formatPercent(mlPrediction.round_win_probability * 100, 1) : "No disponible"}</small>
-                          <small>Modelo económico: {macroModel?.available ? `recomienda ${economyCaseLabel(macroModel.recommended_action)}; candidato ${economyCaseLabel(round.economy_projection.macro_model_candidate_action)} · ${macroModel.model_scope ?? "scope desconocido"}` : `Fallback a reglas${macroModel?.reason ? ` · ${macroModel.reason}` : ""}`}</small>
-                          <small>Confianza macro: {macroModel?.available && macroModel.confidence != null ? formatPercent(macroModel.confidence * 100, 1) : "No disponible"}</small>
-                          <small>Ajuste modelo macro: {formatNumber(round.economy_projection.macro_model_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste mapa: {formatNumber(round.economy_projection.map_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste site: {formatNumber(round.economy_projection.site_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste enemigo: {formatNumber(round.economy_projection.enemy_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste player-fit: {formatNumber(round.economy_projection.player_fit_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste ultimate: {formatNumber(round.economy_projection.ultimate_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste armadura: {formatNumber(round.economy_projection.armor_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste utilidad: {formatNumber(round.economy_projection.utility_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste ML: {formatNumber(round.economy_projection.ml_adjustment ?? 0, 3)}</small>
-                          <small>Ajuste contextual total: {formatNumber(round.economy_projection.contextual_adjustment ?? 0, 3)}</small>
-                          {Object.values(advanced).flatMap((item) => item && "warnings" in item && Array.isArray(item.warnings) ? item.warnings : []).length
-                            ? <small>Avisos contextuales disponibles en modo detalle/debug.</small> : null}
-                        </div>;
-                      })()}
-                    </details>
-                    <small>{round.alternatives.length} alternativas legales disponibles.</small>
-                  </details>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {ml.limitations.length ? <ul className="match-economy-ml-limitations">{ml.limitations.map((item) => <li key={item}>{item}</li>)}</ul> : null}
     </section>
   );
 }
@@ -3962,6 +3995,7 @@ function EconomyOptimalPanel({
   teamALabel,
   teamBLabel,
   selectedTeamKey,
+  agents,
 }: {
   ml: EconomyMlResponse | undefined;
   analysis: EconomyEfficiencyAnalysis | null;
@@ -3971,9 +4005,10 @@ function EconomyOptimalPanel({
   teamALabel: string;
   teamBLabel: string;
   selectedTeamKey: "teamA" | "teamB";
+  agents: AgentContent[];
 }) {
-  if (ml?.available && ml.engine === "player_first_v10" && ml.rounds.length > 0) {
-    return <PlayerFirstEconomyPanel ml={ml} teamAId={teamAId} teamBId={teamBId} teamALabel={teamALabel} teamBLabel={teamBLabel} />;
+  if (ml?.available && (ml.engine === "player_first_v10" || ml.engine === "player_first_v12_decision_grade") && ml.rounds.length > 0) {
+    return <PlayerFirstEconomyPanel ml={ml} teamAId={teamAId} teamBId={teamBId} teamALabel={teamALabel} teamBLabel={teamBLabel} agents={agents} />;
   }
   // LEGACY read-only fallback for saved responses. Production routes only emit player_first_v10.
   if (ml?.available && ml.rounds.length > 0) {
@@ -5375,7 +5410,6 @@ export default function MatchDetailModal({
   const matchDetailPanelRef = useRef<HTMLDivElement | null>(null);
   const playbackActionListRef = useRef<HTMLDivElement | null>(null);
   const { data: matchData, isLoading: matchLoading } = useMatchById(matchId);
-  const { data: economyMlData } = useMatchEconomyMl(matchId);
   const { data: agentsData, isLoading: agentsLoading } = useAgentes();
   const { data: weaponsData, isLoading: weaponsLoading } = useArmas();
   const { data: mapsData, isLoading: mapsLoading } = useMapasGeo();
@@ -5407,6 +5441,11 @@ export default function MatchDetailModal({
       section,
     });
   };
+  const {
+    data: economyMlData,
+    isLoading: economyMlLoading,
+    isFetching: economyMlFetching,
+  } = useMatchEconomyMl(matchId, activeSection === "economy");
   const [teamScoreboardMode, setTeamScoreboardMode] =
     useState<TeamScoreboardMode>("grouped");
   const [scoreboardSideFilter, setScoreboardSideFilter] =
@@ -7608,23 +7647,7 @@ export default function MatchDetailModal({
   };
 
   if (loading || !matchAnalysis) {
-    return (
-      <div
-        className="modal-overlay match-detail-modal-overlay match-detail-loading-overlay"
-        onClick={onClose}
-      >
-        <div
-          className="loading-card match-detail-loading-card"
-          role="status"
-          aria-live="polite"
-          aria-label="Cargando partida"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="loading-spinner" />
-          <h2>Cargando partida</h2>
-        </div>
-      </div>
-    );
+    return <LoadingModal placement="overlay" />;
   }
 
   const matchDetailHero = (
@@ -8060,7 +8083,7 @@ export default function MatchDetailModal({
                                   .join(" · ")}
                               >
                                 <small>
-                                  Loadout <strong>{formatNumber(row.loadout)}</strong>
+                                  Equipamiento <strong>{formatNumber(row.loadout)}</strong>
                                 </small>
                                 <small>
                                   Gastado <strong>{formatNumber(row.spent)}</strong>
@@ -8456,6 +8479,9 @@ export default function MatchDetailModal({
             )}
 
             {activeSection === "economy" && (
+            economyMlLoading || economyMlFetching ? (
+              <LoadingModal placement="section" />
+            ) : (
             <section
               className="match-economy-panel"
               role="region"
@@ -8480,7 +8506,7 @@ export default function MatchDetailModal({
                   <strong>{formatNumber(matchAnalysis.avgSpent)}</strong>
                 </div>
                 <div>
-                  <span>Tu loadout medio/ronda</span>
+                  <span>Tu equipamiento medio por ronda</span>
                   <strong>{formatNumber(matchAnalysis.avgLoadout)}</strong>
                 </div>
               </div>
@@ -8642,8 +8668,10 @@ export default function MatchDetailModal({
                 teamALabel={teamALabel}
                 teamBLabel={teamBLabel}
                 selectedTeamKey={selectedTeamKey}
+                agents={agents}
               />
             </section>
+            )
             )}
             </div>
 

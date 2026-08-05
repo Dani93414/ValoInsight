@@ -914,6 +914,19 @@ def build_player_analytics_embedded(match_obj: dict) -> Dict[str, dict]:
     players = match_obj.get("players", []) or []
     teams = match_obj.get("teams", []) or []
     round_results = match_obj.get("roundResults", []) or []
+    try:
+        from modules.economy_ml.economy_ledger import build_match_economy_ledger
+        economy_ledger = build_match_economy_ledger(match_obj)
+        derived_spend = {
+            (int(round_payload.get("round_number") or 0), str(player.get("puuid") or "")): int(
+                float(player.get("spent") or 0)
+            )
+            for round_payload in economy_ledger.get("rounds") or []
+            for team in (round_payload.get("teams") or {}).values()
+            for player in team.get("players") or []
+        }
+    except Exception:
+        derived_spend = {}
 
     team_winner_map = {team["teamId"]: bool(team.get("won")) for team in teams if team.get("teamId")}
     winning_team_id = next((team_id for team_id, won in team_winner_map.items() if won), None)
@@ -958,7 +971,7 @@ def build_player_analytics_embedded(match_obj: dict) -> Dict[str, dict]:
             SIDE_DEFENSE: [],
         }
 
-        for round_obj in round_results:
+        for round_index, round_obj in enumerate(round_results):
             pstats_map = _player_stats_map(round_obj)
             round_pstat = pstats_map.get(puuid, {})
             all_kills = _collect_round_kills(round_obj)
@@ -1013,7 +1026,12 @@ def build_player_analytics_embedded(match_obj: dict) -> Dict[str, dict]:
 
             score_round = int(round_pstat.get("score", 0) or 0)
             economy = round_pstat.get("economy", {}) or {}
-            spent = int(economy.get("spent", 0) or 0)
+            display_round_number = (
+                int(round_obj.get("roundNum")) + 1
+                if round_obj.get("roundNum") == round_index
+                else int(round_obj.get("roundNum") or round_index + 1)
+            )
+            spent = int(derived_spend.get((display_round_number, str(puuid)), 0))
             loadout_value = int(economy.get("loadoutValue", 0) or 0)
             equipped_weapon_id = str(economy.get("weapon") or "UNKNOWN")
             equipped_armor_id = str(economy.get("armor") or "UNKNOWN")

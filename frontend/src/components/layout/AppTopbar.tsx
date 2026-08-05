@@ -1,10 +1,18 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { ChevronDown, LogIn, LogOut, Search } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { AuthModal } from "../auth/AuthModal";
-import { PlayerSearchModal } from "../search/PlayerSearchModal";
 import { useAuth } from "../../context/AuthContext";
+import LoadingModal from "../ui/LoadingModal";
 import "./AppTopbar.css";
+
+const loadAuthModal = () =>
+  import("../auth/AuthModal").then((module) => ({ default: module.AuthModal }));
+const loadPlayerSearchModal = () =>
+  import("../search/PlayerSearchModal").then((module) => ({
+    default: module.PlayerSearchModal,
+  }));
+const AuthModal = lazy(loadAuthModal);
+const PlayerSearchModal = lazy(loadPlayerSearchModal);
 
 type NavLink = {
   label: string;
@@ -76,6 +84,7 @@ export function AppTopbar() {
   const { user, isLoggedIn, logout } = useAuth();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isPlayerSearchOpen, setIsPlayerSearchOpen] = useState(false);
+  const [isAuthActionLoading, setIsAuthActionLoading] = useState(false);
   const [moreMenuMode, setMoreMenuMode] = useState<"default" | "open" | "closed">(
     "default",
   );
@@ -118,7 +127,12 @@ export function AppTopbar() {
       setIsAuthModalOpen(true);
       return;
     }
-    await logout();
+    setIsAuthActionLoading(true);
+    try {
+      await logout();
+    } finally {
+      setIsAuthActionLoading(false);
+    }
   };
 
   const handleToggleMoreMenu = () => {
@@ -201,6 +215,8 @@ export function AppTopbar() {
           <button
             className="app-topbar__search-button"
             type="button"
+            onMouseEnter={loadPlayerSearchModal}
+            onFocus={loadPlayerSearchModal}
             onClick={() => setIsPlayerSearchOpen(true)}
             aria-label="Buscar jugador"
           >
@@ -227,6 +243,8 @@ export function AppTopbar() {
               isLoggedIn ? " app-topbar__login-button--icon-only" : ""
             }`}
             type="button"
+            onMouseEnter={!isLoggedIn ? loadAuthModal : undefined}
+            onFocus={!isLoggedIn ? loadAuthModal : undefined}
             onClick={handleAuthAction}
             aria-label={isLoggedIn ? "Cerrar sesion" : undefined}
             title={isLoggedIn ? "Cerrar sesion" : undefined}
@@ -243,14 +261,21 @@ export function AppTopbar() {
         </div>
       </header>
 
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-      />
-      <PlayerSearchModal
-        isOpen={isPlayerSearchOpen}
-        onClose={() => setIsPlayerSearchOpen(false)}
-      />
+      <Suspense fallback={<LoadingModal placement="overlay" />}>
+        {isAuthModalOpen && (
+          <AuthModal
+            isOpen
+            onClose={() => setIsAuthModalOpen(false)}
+          />
+        )}
+        {isPlayerSearchOpen && (
+          <PlayerSearchModal
+            isOpen
+            onClose={() => setIsPlayerSearchOpen(false)}
+          />
+        )}
+      </Suspense>
+      {isAuthActionLoading && <LoadingModal placement="overlay" />}
     </>
   );
 }

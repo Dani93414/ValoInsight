@@ -19,14 +19,22 @@ from modules.economy_ml.dataset_builder import (
 )
 from modules.economy_ml.economy_ledger import build_economy_ledger_report
 from modules.economy_ml.model_registry import status
-from modules.economy_ml.round_recommender import recommend_match_economy
+from modules.economy_ml.match_analysis_cache import (
+    clear_match_economy_analysis_cache,
+    get_match_economy_analysis,
+)
 from modules.economy_ml.train import train_models
 from modules.economy_ml.round_win_dataset import build_round_win_dataset
 from modules.economy_ml.train_round_win_model import train_round_win_model
 from modules.matches.infrastructure import mongo_match_repo
+from pathlib import Path
 
 router = APIRouter()
 _training_lock = Lock()
+_V12_CANDIDATE_DATASET = (
+    Path(__file__).resolve().parents[1] / "artifacts"
+    / "v12_candidate" / "economy_round_dataset.parquet"
+)
 
 
 @router.get("/status")
@@ -104,7 +112,7 @@ def train_economy_ml(x_economy_ml_train_token: str | None = Header(default=None)
                 status_code=422,
                 detail={"message": "Dataset inválido", "validation": validation},
             )
-        save_dataset(dataset)
+        save_dataset(dataset, _V12_CANDIDATE_DATASET)
         try:
             main_result = train_models(dataset)
         except ValueError as exc:
@@ -118,6 +126,7 @@ def train_economy_ml(x_economy_ml_train_token: str | None = Header(default=None)
             round_win_result = {
                 "available": False, "reason": "round_win_training_failed", "error": str(exc),
             }
+        clear_match_economy_analysis_cache()
         return {**main_result, "round_win_loadout": round_win_result}
     finally:
         _training_lock.release()
@@ -128,4 +137,4 @@ def match_economy_ml(match_id: str):
     match = mongo_match_repo.find_by_id(match_id)
     if not match:
         raise HTTPException(status_code=404, detail="Partida no encontrada")
-    return recommend_match_economy(match)
+    return get_match_economy_analysis(match)

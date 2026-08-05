@@ -162,8 +162,9 @@ def evaluate_team_plan_from_action(
     state: dict[str, Any],
     action: str,
     estimated_match_win_probability: float | None = None,
+    learned_profile: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    features = simulate_action_features(state, action)
+    features = simulate_action_features(state, action, learned_profile)
     case = classify_economy_case(state, action)
     buy_case, subtype = case["macro_buy_case"], case["economy_intent"]
     target_loadout_case = normalize_target_loadout_case(

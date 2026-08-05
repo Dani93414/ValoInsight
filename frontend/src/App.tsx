@@ -1,6 +1,8 @@
 import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AppTopbar } from "./components/layout/AppTopbar";
+import PageLoadingScreen from "./components/ui/PageLoadingScreen";
+import { useAuth } from "./context/AuthContext";
 
 const Home = lazy(() => import("./pages/Home"));
 const Agentes = lazy(() => import("./pages/Agentes"));
@@ -23,20 +25,18 @@ const Estadisticas = lazy(() => import("./pages/Estadisticas"));
 const HeatmapPage = lazy(() => import("./pages/HeatmapPage"));
 
 function App() {
+  const { isLoading: isAuthLoading } = useAuth();
+
+  if (isAuthLoading) {
+    return <PageLoadingScreen />;
+  }
+
   return (
     <BrowserRouter>
       <div className="page-scale">
         <AppTopbar />
         <Suspense
-          fallback={
-            <div className="loading-screen" role="status" aria-live="polite">
-              <div className="loading-card">
-                <div className="loading-spinner" />
-                <h2>Cargando pagina</h2>
-                <p>Preparando la experiencia...</p>
-              </div>
-            </div>
-          }
+          fallback={<PageLoadingScreen />}
         >
           <Routes>
             <Route path="/" element={<Home />} />

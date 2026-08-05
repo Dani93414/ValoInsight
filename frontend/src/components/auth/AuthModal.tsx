@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { Check, Search, ShieldCheck, X } from "lucide-react";
 import { searchPlayers } from "../../api/playerApi";
 import { useAuth } from "../../context/AuthContext";
+import LoadingModal from "../ui/LoadingModal";
 import "./AuthModal.css";
 
 type AuthMode = "login" | "register";
@@ -131,6 +132,10 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
     }
   };
 
+  if (isSubmitting) {
+    return <LoadingModal placement="overlay" />;
+  }
+
   return (
     <div
       className="home-auth-modal"
@@ -254,10 +259,7 @@ export function AuthModal({ isOpen, onClose }: AuthModalProps) {
               </div>
 
               {isSearching && (
-                <div className="home-search-loading">
-                  <span className="home-search-spinner" />
-                  Buscando jugador...
-                </div>
+                <LoadingModal placement="section" />
               )}
 
               {!isSearching && playerResults.length > 0 && (

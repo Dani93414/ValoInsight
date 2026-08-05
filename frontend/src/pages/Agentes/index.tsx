@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import BackButton from "../../components/BackButton";
 import FloatingActionButton from "../../components/FloatingActionButton";
+import PageLoadingScreen from "../../components/ui/PageLoadingScreen";
+import LoadingModal from "../../components/ui/LoadingModal";
 import "../Agentes.css";
 import { AgentCompareDrawer } from "./components/AgentCompareDrawer";
 import { AgentCompareSelector } from "./components/AgentCompareSelector";
@@ -148,15 +150,7 @@ export default function Agentes() {
   };
 
   if (viewModel.isLoading) {
-    return (
-      <div className="loading-screen" role="status" aria-live="polite">
-        <div className="loading-card">
-          <div className="loading-spinner" />
-          <h2>Cargando agentes</h2>
-          <p>Plantando la spike...</p>
-        </div>
-      </div>
-    );
+    return <PageLoadingScreen />;
   }
 
   if (viewModel.isError) {
@@ -201,13 +195,7 @@ export default function Agentes() {
         />
       )}
       {viewModel.isFilteringGlobalStats && (
-        <div className="agents-loading-modal" role="status" aria-live="polite" aria-label="Actualizando filtros">
-          <div className="loading-card agents-loading-modal__card">
-            <div className="loading-spinner" />
-            <h2>Actualizando filtros</h2>
-            <p>Recalculando métricas globales...</p>
-          </div>
-        </div>
+        <LoadingModal placement="overlay" />
       )}
 
       <AgentFilters

@@ -1,6 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import type { GlobalAgentStatsFilters, GlobalMapStatsFilters } from "../types/globalStats";
-import { getGlobalAgentStats, getGlobalMapStats, getRegions } from "./globalStats";
+import {
+  getGlobalAgentStats,
+  getGlobalMapStats,
+  getRegionOptions,
+  getRegionSummaries,
+  getRegionWeaponStats,
+  getRegions,
+} from "./globalStats";
 
 const GLOBAL_STATS_STALE = 1000 * 60 * 10;
 
@@ -12,7 +19,31 @@ export function useRegions() {
   });
 }
 
-export function useGlobalAgentStats(filters: GlobalAgentStatsFilters) {
+export function useRegionOptions() {
+  return useQuery({
+    queryKey: ["global-stats", "region-options"],
+    queryFn: getRegionOptions,
+    staleTime: GLOBAL_STATS_STALE,
+  });
+}
+
+export function useRegionSummaries() {
+  return useQuery({
+    queryKey: ["global-stats", "region-summaries"],
+    queryFn: getRegionSummaries,
+    staleTime: GLOBAL_STATS_STALE,
+  });
+}
+
+export function useRegionWeaponStats() {
+  return useQuery({
+    queryKey: ["global-stats", "region-weapon-stats"],
+    queryFn: getRegionWeaponStats,
+    staleTime: GLOBAL_STATS_STALE,
+  });
+}
+
+export function useGlobalAgentStats(filters: GlobalAgentStatsFilters, enabled = true) {
   return useQuery({
     queryKey: [
       "global-stats",
@@ -23,6 +54,7 @@ export function useGlobalAgentStats(filters: GlobalAgentStatsFilters) {
       filters.act ?? "all",
     ],
     queryFn: () => getGlobalAgentStats(filters),
+    enabled,
     placeholderData: (previousData) => previousData,
     staleTime: 1000 * 60 * 10,
   });
